@@ -1,0 +1,78 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id          String             @id @default(cuid())
+  email       String             @unique
+  name        String?
+  picture     String?
+  googleId    String?            @unique
+  targetRole  String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  resumes     Resume[]
+  sessions    InterviewSession[]
+}
+
+model Resume {
+  id         String             @id @default(cuid())
+  userId     String
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileUrl    String
+  parsedJson Json
+  version    Int                @default(1)
+  createdAt  DateTime           @default(now())
+  analyses   Analysis[]
+  sessions   InterviewSession[]
+}
+
+model Analysis {
+  id           String   @id @default(cuid())
+  resumeId     String
+  resume       Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  jdText       String?
+  atsScore     Int
+  matchScore   Int?
+  feedbackJson Json
+  createdAt    DateTime @default(now())
+}
+
+model InterviewSession {
+  id          String              @id @default(cuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumeId    String?
+  resume      Resume?             @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+  targetRole  String
+  status      String              @default("in_progress") // in_progress | completed
+  summaryJson Json?
+  createdAt   DateTime            @default(now())
+  completedAt DateTime?
+  questions   InterviewQuestion[]
+}
+
+model InterviewQuestion {
+  id           String           @id @default(cuid())
+  sessionId    String
+  session      InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  order        Int
+  category     String
+  questionText String
+  answer       InterviewAnswer?
+}
+
+model InterviewAnswer {
+  id             String            @id @default(cuid())
+  questionId     String            @unique
+  question       InterviewQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  transcript     String
+  evaluationJson Json
+  scoreOverall   Int
+  createdAt      DateTime          @default(now())
+}
