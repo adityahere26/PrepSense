@@ -14,18 +14,18 @@ export const Login: React.FC = () => {
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-12">
-      <Card className="w-full max-w-md glass-panel p-8 rounded-3xl space-y-8 shadow-2xl relative overflow-hidden border-0 ring-0">
+      <Card className="w-full max-w-md glass-panel p-8 rounded-3xl space-y-8 shadow-xl relative overflow-hidden border border-teal-100 bg-white/95">
         {/* Glow accent */}
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-600/30 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -top-24 -right-24 w-48 h-48 bg-teal-400/20 rounded-full blur-3xl pointer-events-none" />
 
         <CardHeader className="p-0 text-center space-y-3">
-          <div className="mx-auto w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
-            <Sparkles className="w-6 h-6 text-white" />
+          <div className="mx-auto w-12 h-12 rounded-2xl bg-[#043c44] flex items-center justify-center shadow-lg shadow-[#043c44]/20">
+            <Sparkles className="w-6 h-6 text-teal-300" />
           </div>
-          <CardTitle className="font-heading font-extrabold text-2xl text-white">
+          <CardTitle className="font-heading font-extrabold text-2xl text-[#043c44]">
             Welcome to PrepSense
           </CardTitle>
-          <CardDescription className="text-sm text-slate-400">
+          <CardDescription className="text-sm text-slate-600">
             Sign in to start analyzing resumes and taking voice mock interviews.
           </CardDescription>
         </CardHeader>
@@ -34,7 +34,7 @@ export const Login: React.FC = () => {
           {/* Main Google Sign-In button */}
           <Button
             onClick={loginWithGoogle}
-            className="w-full py-3.5 h-auto px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-semibold shadow-md transition-all flex items-center justify-center gap-3 border border-slate-200"
+            className="w-full py-3.5 h-auto px-4 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-semibold shadow-xs transition-all flex items-center justify-center gap-3 border border-slate-200"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">
               <path
@@ -59,25 +59,25 @@ export const Login: React.FC = () => {
 
           <div className="relative my-4">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-800" />
+              <div className="w-full border-t border-slate-200" />
             </div>
             <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-slate-950 px-2 text-slate-500">Developer Testing</span>
+              <span className="bg-white px-2 text-slate-400 font-medium">Developer Testing</span>
             </div>
           </div>
 
           {/* Quick Mock Sign-In for testing without GCP Credentials configured */}
           <Button
             onClick={loginWithMock}
-            className="w-full py-3 h-auto px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white font-medium text-sm transition-all border border-slate-800 flex items-center justify-center gap-2"
+            className="w-full py-3 h-auto px-4 rounded-xl bg-teal-50 hover:bg-teal-100/70 text-[#043c44] font-semibold text-sm transition-all border border-teal-200/80 flex items-center justify-center gap-2"
           >
-            <Zap className="w-4 h-4 text-amber-400" />
+            <Zap className="w-4 h-4 text-[#0d9488]" />
             Quick Dev Login (Mock OAuth)
           </Button>
         </CardContent>
 
         <CardFooter className="p-0 border-0 bg-transparent flex items-center justify-center gap-1.5 text-xs text-slate-500 pt-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-500" />
+          <ShieldCheck className="w-4 h-4 text-[#0d9488]" />
           <span>JWT Authenticated • Cross-Origin CORS Secured</span>
         </CardFooter>
       </Card>

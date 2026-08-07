@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import passport from './config/passport.js';
 import authRoutes from './routes/auth.js';
+import successStoriesRoutes from './routes/successStories.js';
+import resourceRoutes from './routes/resources.js';
 
 dotenv.config();
 
@@ -29,6 +31,8 @@ app.use(passport.initialize());
 
 // 4. Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/success-stories', successStoriesRoutes);
+app.use('/api/resources', resourceRoutes);
 
 // Health Check Endpoint
 app.get('/api/health', (_req, res) => {

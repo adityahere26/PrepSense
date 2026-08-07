@@ -1,6 +1,6 @@
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
 generator client {
@@ -8,16 +8,17 @@ generator client {
 }
 
 model User {
-  id          String             @id @default(cuid())
-  email       String             @unique
-  name        String?
-  picture     String?
-  googleId    String?            @unique
-  targetRole  String?
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  resumes     Resume[]
-  sessions    InterviewSession[]
+  id             String             @id @default(cuid())
+  email          String             @unique
+  name           String?
+  picture        String?
+  googleId       String?            @unique
+  targetRole     String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  resumes        Resume[]
+  sessions       InterviewSession[]
+  successStories SuccessStory[]
 }
 
 model Resume {
@@ -25,7 +26,7 @@ model Resume {
   userId     String
   user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   fileUrl    String
-  parsedJson Json
+  parsedJson String             // Stores JSON stringified data in SQLite
   version    Int                @default(1)
   createdAt  DateTime           @default(now())
   analyses   Analysis[]
@@ -39,7 +40,7 @@ model Analysis {
   jdText       String?
   atsScore     Int
   matchScore   Int?
-  feedbackJson Json
+  feedbackJson String   // Stores JSON stringified data in SQLite
   createdAt    DateTime @default(now())
 }
 
@@ -51,7 +52,7 @@ model InterviewSession {
   resume      Resume?             @relation(fields: [resumeId], references: [id], onDelete: SetNull)
   targetRole  String
   status      String              @default("in_progress") // in_progress | completed
-  summaryJson Json?
+  summaryJson String?             // Stores JSON stringified data in SQLite
   createdAt   DateTime            @default(now())
   completedAt DateTime?
   questions   InterviewQuestion[]
@@ -72,7 +73,28 @@ model InterviewAnswer {
   questionId     String            @unique
   question       InterviewQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
   transcript     String
-  evaluationJson Json
+  evaluationJson String            // Stores JSON stringified data in SQLite
   scoreOverall   Int
   createdAt      DateTime          @default(now())
+}
+
+model SuccessStory {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  authorName   String
+  roleAchieved String?
+  content      String
+  approved     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
+
+model Resource {
+  id        String   @id @default(cuid())
+  title     String
+  slug      String   @unique
+  category  String
+  summary   String
+  content   String
+  createdAt DateTime @default(now())
 }

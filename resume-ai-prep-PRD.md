@@ -67,6 +67,8 @@ Fresher or early-career candidate from any field (tech, product, marketing, fina
 | Feature | Why it matters |
 |---|---|
 | Score trend dashboard across sessions | Proves the "improvement over time" story — strong demo moment |
+| User-submitted Success Stories (moderated) | Real users can submit a short success story post-signup; only manually-approved stories show publicly on the landing page — avoids fake social proof |
+| Resources page (DB-backed) | Interview/resume prep articles stored in Postgres, listed + detail pages; content managed via seed data/Prisma Studio, no admin UI built yet |
 | Role auto-suggestion from resume | If user leaves target role blank, infer a likely role from resume content and let them confirm/edit it |
 | Filler-word / pacing detection from transcript | Extra polish signal, easy to add once transcript exists |
 | Resume version history | Shows product thinking about iteration |
@@ -202,6 +204,8 @@ All routes except `/api/auth/*` require the JWT Bearer token (Express middleware
 ## 10. Phased Build Plan (10-12 working days, buffer for the rest of week 2)
 
 Each phase below has a ready-to-paste **Antigravity task prompt**. Give it one phase at a time in Planning Mode, review the plan it proposes before letting it execute, and check its Artifacts (screenshots/browser verification) before moving to the next phase.
+
+> **Note:** Success Stories and the static Resources page (originally scoped for Phase 5) were built ahead of schedule, before Phase 1, as part of finishing the landing page early. Keep an eye on buffer time before Phase 3 (voice interview) as a result.
 
 ### Phase 0 — Setup (half day)
 > **Antigravity prompt:** "Scaffold a monorepo with two folders: `client` (React 18 + Vite + TypeScript, Tailwind CSS, shadcn/ui, React Router, TanStack Query) and `server` (Express + TypeScript, Prisma with PostgreSQL via env var DATABASE_URL). In server, set up Passport.js with the Google OAuth 2.0 strategy, and on successful auth issue a JWT that the client stores and sends as a Bearer token. Configure CORS on the server to allow only the client's origin, with credentials support. Create a basic client layout with a nav bar, a login page, and an empty dashboard route protected by an auth check. Set up .env.example files in both folders with all required keys. Verify both apps run locally (e.g. via concurrently or two terminal scripts) and that Google sign-in works end to end, with the client successfully calling one authenticated test endpoint on the server."
