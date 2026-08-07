@@ -2,6 +2,8 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Sparkles, ShieldCheck, Zap } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 
 export const Login: React.FC = () => {
   const { user, loginWithGoogle, loginWithMock } = useAuth();
@@ -12,27 +14,27 @@ export const Login: React.FC = () => {
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-md glass-panel p-8 rounded-3xl space-y-8 shadow-2xl relative overflow-hidden">
+      <Card className="w-full max-w-md glass-panel p-8 rounded-3xl space-y-8 shadow-2xl relative overflow-hidden border-0 ring-0">
         {/* Glow accent */}
         <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-600/30 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="text-center space-y-3">
+        <CardHeader className="p-0 text-center space-y-3">
           <div className="mx-auto w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
             <Sparkles className="w-6 h-6 text-white" />
           </div>
-          <h2 className="font-heading font-extrabold text-2xl text-white">
+          <CardTitle className="font-heading font-extrabold text-2xl text-white">
             Welcome to PrepSense
-          </h2>
-          <p className="text-sm text-slate-400">
+          </CardTitle>
+          <CardDescription className="text-sm text-slate-400">
             Sign in to start analyzing resumes and taking voice mock interviews.
-          </p>
-        </div>
+          </CardDescription>
+        </CardHeader>
 
-        <div className="space-y-4">
+        <CardContent className="p-0 space-y-4">
           {/* Main Google Sign-In button */}
-          <button
+          <Button
             onClick={loginWithGoogle}
-            className="w-full py-3.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-semibold shadow-md transition-all flex items-center justify-center gap-3 border border-slate-200"
+            className="w-full py-3.5 h-auto px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-semibold shadow-md transition-all flex items-center justify-center gap-3 border border-slate-200"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">
               <path
@@ -53,7 +55,7 @@ export const Login: React.FC = () => {
               />
             </svg>
             Sign in with Google
-          </button>
+          </Button>
 
           <div className="relative my-4">
             <div className="absolute inset-0 flex items-center">
@@ -65,20 +67,21 @@ export const Login: React.FC = () => {
           </div>
 
           {/* Quick Mock Sign-In for testing without GCP Credentials configured */}
-          <button
+          <Button
             onClick={loginWithMock}
-            className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white font-medium text-sm transition-all border border-slate-800 flex items-center justify-center gap-2"
+            className="w-full py-3 h-auto px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white font-medium text-sm transition-all border border-slate-800 flex items-center justify-center gap-2"
           >
             <Zap className="w-4 h-4 text-amber-400" />
             Quick Dev Login (Mock OAuth)
-          </button>
-        </div>
+          </Button>
+        </CardContent>
 
-        <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500 pt-2">
+        <CardFooter className="p-0 border-0 bg-transparent flex items-center justify-center gap-1.5 text-xs text-slate-500 pt-2">
           <ShieldCheck className="w-4 h-4 text-emerald-500" />
           <span>JWT Authenticated • Cross-Origin CORS Secured</span>
-        </div>
-      </div>
+        </CardFooter>
+      </Card>
     </div>
   );
 };
+

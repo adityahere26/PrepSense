@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Sparkles, LogOut, User as UserIcon, LayoutDashboard } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 export const Navbar: React.FC = () => {
   const { user, logout } = useAuth();
@@ -65,22 +66,26 @@ export const Navbar: React.FC = () => {
                     {user.name || user.email}
                   </span>
                 </div>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={handleLogout}
-                  className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-900 rounded-lg transition-colors"
+                  className="p-2 h-auto w-auto text-slate-400 hover:text-red-400 hover:bg-slate-900 rounded-lg transition-colors"
                   title="Sign Out"
                 >
                   <LogOut className="w-4 h-4" />
-                </button>
+                </Button>
               </div>
             ) : (
-              <Link
-                to="/login"
-                className="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition-all flex items-center gap-1.5"
+              <Button
+                asChild
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition-all flex items-center gap-1.5 h-auto"
               >
-                <UserIcon className="w-3.5 h-3.5" />
-                Sign In
-              </Link>
+                <Link to="/login">
+                  <UserIcon className="w-3.5 h-3.5" />
+                  Sign In
+                </Link>
+              </Button>
             )}
           </div>
         </div>
@@ -88,3 +93,4 @@ export const Navbar: React.FC = () => {
     </header>
   );
 };
+
