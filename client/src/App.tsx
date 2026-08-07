@@ -8,6 +8,8 @@ import { Home } from './pages/Home';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { Dashboard } from './pages/Dashboard';
+import { Resources } from './pages/Resources';
+import { ResourceDetail } from './pages/ResourceDetail';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,6 +37,8 @@ export const App: React.FC = () => {
             <main className="flex-1 relative z-10">
               <Routes>
                 <Route path="/" element={<Home />} />
+                <Route path="/resources" element={<Resources />} />
+                <Route path="/resources/:slug" element={<ResourceDetail />} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route
