@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Sparkles, LogOut, User as UserIcon, LayoutDashboard, BookOpen } from 'lucide-react';
+import { Sparkles, LogOut, User as UserIcon, LayoutDashboard, BookOpen, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export const Navbar: React.FC = () => {
@@ -34,6 +34,13 @@ export const Navbar: React.FC = () => {
               className="text-sm font-semibold text-slate-700 hover:text-[#043c44] transition-colors"
             >
               Home
+            </Link>
+            <Link
+              to="/#success-stories"
+              className="text-sm font-semibold text-slate-700 hover:text-[#043c44] flex items-center gap-1.5 transition-colors"
+            >
+              <Trophy className="w-4 h-4 text-[#0d9488]" />
+              Success Stories
             </Link>
             <Link
               to="/resources"

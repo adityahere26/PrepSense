@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Sparkles, FileText, Mic, BarChart3, ArrowRight, Quote, Trophy, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -17,8 +17,18 @@ interface SuccessStory {
 
 export const Home: React.FC = () => {
   const { user } = useAuth();
+  const location = useLocation();
   const [stories, setStories] = useState<SuccessStory[]>([]);
   const [isLoadingStories, setIsLoadingStories] = useState(true);
+
+  useEffect(() => {
+    if (location.hash === '#success-stories') {
+      const el = document.getElementById('success-stories');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+  }, [location]);
 
   useEffect(() => {
     const fetchStories = async () => {
@@ -146,7 +156,7 @@ export const Home: React.FC = () => {
       </div>
 
       {/* Success Stories Section */}
-      <div className="space-y-10 pt-6">
+      <div id="success-stories" className="space-y-10 pt-6">
         <div className="text-center space-y-3 max-w-2xl mx-auto">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60 text-xs font-semibold uppercase tracking-wider">
             <Trophy className="w-3.5 h-3.5" />
