@@ -6,6 +6,7 @@ import { uploadMultipartApi, getStoredToken } from '../lib/api';
 
 interface ResumeUploadFormProps {
   initialTargetRole?: string;
+  resumeGroupId?: string;
   onUploadSuccess: (resumeData: any) => void;
   onCancel?: () => void;
 }
@@ -22,6 +23,7 @@ const SUGGESTED_ROLES = [
 
 export const ResumeUploadForm: React.FC<ResumeUploadFormProps> = ({
   initialTargetRole = '',
+  resumeGroupId,
   onUploadSuccess,
   onCancel,
 }) => {
@@ -89,6 +91,9 @@ export const ResumeUploadForm: React.FC<ResumeUploadFormProps> = ({
 
     const formData = new FormData();
     formData.append('targetRole', targetRole.trim());
+    if (resumeGroupId) {
+      formData.append('resumeGroupId', resumeGroupId);
+    }
     formData.append('resume', selectedFile);
 
     try {
@@ -121,10 +126,12 @@ export const ResumeUploadForm: React.FC<ResumeUploadFormProps> = ({
           </div>
           <div>
             <CardTitle className="font-heading font-bold text-xl text-[#043c44]">
-              Upload Your Resume
+              {resumeGroupId ? 'Upload New Resume Version' : 'Upload Independent Resume'}
             </CardTitle>
             <CardDescription className="text-xs text-slate-500">
-              Provide your target role and resume file. We'll parse it instantly with Gemini AI.
+              {resumeGroupId
+                ? 'Upload an updated version of this resume. It will be added to this resume group history.'
+                : 'Upload a brand new independent resume for parsing and AI analysis.'}
             </CardDescription>
           </div>
         </div>

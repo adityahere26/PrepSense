@@ -54,7 +54,7 @@ Fresher or early-career candidate from any field (tech, product, marketing, fina
 |---|---|
 | Target role input | User specifies target role/field as free text (e.g. "SDE", "Digital Marketing", "Investment Banking Analyst") at onboarding — drives every downstream AI call |
 | Resume upload (PDF/DOCX) | File parsed to structured JSON (contact, experience, skills, education, projects) within 10s |
-| Resume analysis | Given resume + target role + optional JD, returns ATS score, JD match %, and section-wise feedback relevant to that field |
+| Resume analysis | Given resume + target role + optional JD, returns an AI content-quality score, a deterministic format-compatibility check (separate from the AI score), JD match %, and section-wise feedback relevant to that field |
 | Rewrite suggestions | At least 3 specific bullet-level rewrite suggestions with before/after, phrased for the target field's norms |
 | Role-adaptive question categories | LLM infers the right mix of question types for the given field (e.g. technical + system design + behavioral for SDE; product sense + execution + behavioral for PM; campaign strategy + analytics + behavioral for marketing) rather than a fixed category list |
 | Voice interview session | 5-7 personalized questions generated from resume + target role using the inferred categories; AI asks via TTS, user answers via mic |
@@ -148,13 +148,14 @@ model Resume {
 }
 
 model Analysis {
-  id           String   @id @default(cuid())
-  resumeId     String
-  jdText       String?
-  atsScore     Int
-  matchScore   Int?
-  feedbackJson Json
-  createdAt    DateTime @default(now())
+  id                  String   @id @default(cuid())
+  resumeId            String
+  jdText              String?
+  aiQualityScore       Int      // Gemini's subjective content/keyword quality score (0-100) — NOT a real ATS simulation
+  matchScore          Int?
+  feedbackJson        Json
+  formatCompatibility Json     // deterministic, rule-based checks: scanned-PDF detection, embedded images, tables, multi-column layout, missing standard sections
+  createdAt           DateTime @default(now())
 }
 
 model InterviewSession {

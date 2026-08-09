@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { prisma } from '../db.js';
 
 export interface UserPayload {
   id: string;
@@ -30,11 +31,11 @@ export function generateToken(payload: UserPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 }
 
-export function authenticateJWT(req: Request, res: Response, next: NextFunction) {
+export async function authenticateJWT(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    console.warn(`🔒 Auth Failure [${req.method} ${req.path}]: Missing or invalid Authorization header. Header value:`, authHeader || '(none)');
+    console.warn(`🔒 Auth Failure [${req.method} ${req.path}]: Missing or invalid Authorization header.`);
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid Authorization header format' });
   }
 
@@ -48,6 +49,39 @@ export function authenticateJWT(req: Request, res: Response, next: NextFunction)
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as UserPayload;
     req.user = decoded;
+
+    // Verify or auto-provision DB User record to guarantee valid PostgreSQL User ID
+    try {
+      let dbUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { id: decoded.id },
+            { email: decoded.email },
+          ],
+        },
+      });
+
+      if (!dbUser && decoded.email) {
+        dbUser = await prisma.user.create({
+          data: {
+            id: decoded.id,
+            email: decoded.email,
+            name: decoded.name || decoded.email.split('@')[0],
+            picture: decoded.picture || null,
+            targetRole: decoded.targetRole || null,
+          },
+        });
+      }
+
+      if (dbUser) {
+        req.user.id = dbUser.id;
+        req.user.email = dbUser.email;
+        req.user.targetRole = dbUser.targetRole || req.user.targetRole;
+      }
+    } catch (dbErr) {
+      console.warn('⚠️ Non-critical DB user sync check warning in authenticateJWT:', dbErr);
+    }
+
     next();
   } catch (error: any) {
     console.error(`🔒 Auth Failure [${req.method} ${req.path}]: JWT Verification Error - Name: "${error.name}", Message: "${error.message}"`);

@@ -19,12 +19,14 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
+import { ResumeAnalysisView } from './ResumeAnalysisView';
 
 export interface ParsedResumeProps {
   resume: {
     id: string;
+    resumeGroupId?: string;
     fileUrl: string;
-    targetRole?: string;
+    targetRole?: string | null;
     version?: number;
     createdAt?: string;
     parsedJson: {
@@ -185,6 +187,9 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume, onReuplo
         {/* Glow decoration */}
         <div className="absolute -bottom-20 -right-20 w-72 h-72 bg-teal-400/10 rounded-full blur-3xl pointer-events-none" />
       </Card>
+
+      {/* AI Resume Analysis Section */}
+      <ResumeAnalysisView resumeId={resume.id} targetRole={targetRole || undefined} />
 
       {/* Summary Section */}
       {parsedJson?.summary && (

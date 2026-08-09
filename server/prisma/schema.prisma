@@ -22,26 +22,30 @@ model User {
 }
 
 model Resume {
-  id         String             @id @default(cuid())
-  userId     String
-  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  fileUrl    String
-  parsedJson String             // Stores JSON stringified data in SQLite
-  version    Int                @default(1)
-  createdAt  DateTime           @default(now())
-  analyses   Analysis[]
-  sessions   InterviewSession[]
+  id            String             @id @default(cuid())
+  userId        String
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumeGroupId String             // Groups versions of the 'same' resume together
+  fileUrl       String
+  parsedJson    String             // Stores JSON stringified data in SQLite
+  version       Int                @default(1)
+  createdAt     DateTime           @default(now())
+  analyses      Analysis[]
+  sessions      InterviewSession[]
+
+  @@index([userId, resumeGroupId])
 }
 
 model Analysis {
-  id           String   @id @default(cuid())
-  resumeId     String
-  resume       Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
-  jdText       String?
-  atsScore     Int
-  matchScore   Int?
-  feedbackJson String   // Stores JSON stringified data in SQLite
-  createdAt    DateTime @default(now())
+  id                  String   @id @default(cuid())
+  resumeId            String
+  resume              Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  jdText              String?
+  aiQualityScore      Int      @default(70) // Gemini content/keyword quality score (0-100)
+  matchScore          Int?
+  feedbackJson        String   // Stores JSON stringified data
+  formatCompatibility String   @default("[]") // Stores JSON stringified array of deterministic checks [{ check, passed, message }]
+  createdAt           DateTime @default(now())
 }
 
 model InterviewSession {

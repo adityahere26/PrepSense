@@ -88,3 +88,52 @@ export async function getR2SignedUrl(fileUrlOrKey: string): Promise<string> {
     return fileUrlOrKey;
   }
 }
+
+/**
+ * Fetches the raw file Buffer from Cloudflare R2 bucket.
+ */
+export async function getBufferFromR2(fileUrlOrKey: string): Promise<Buffer | null> {
+  if (!fileUrlOrKey) return null;
+
+  if (s3Client) {
+    try {
+      let key = fileUrlOrKey;
+      if (fileUrlOrKey.startsWith('http://') || fileUrlOrKey.startsWith('https://')) {
+        const urlObj = new URL(fileUrlOrKey);
+        const pathParts = urlObj.pathname.split('/').filter(Boolean);
+        if (pathParts[0] === R2_BUCKET_NAME) {
+          key = pathParts.slice(1).join('/');
+        } else {
+          key = pathParts.join('/');
+        }
+      }
+
+      const command = new GetObjectCommand({
+        Bucket: R2_BUCKET_NAME,
+        Key: key,
+      });
+
+      const response = await s3Client.send(command);
+      if (response.Body) {
+        const byteArray = await response.Body.transformToByteArray();
+        return Buffer.from(byteArray);
+      }
+    } catch (error) {
+      console.warn('Failed to fetch file buffer directly from S3 client, trying HTTP fetch...', error);
+    }
+  }
+
+  try {
+    const signedUrl = await getR2SignedUrl(fileUrlOrKey);
+    const res = await fetch(signedUrl);
+    if (res.ok) {
+      const arrayBuffer = await res.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    }
+  } catch (err) {
+    console.error('Failed to fetch buffer via HTTP:', err);
+  }
+
+  return null;
+}
+
