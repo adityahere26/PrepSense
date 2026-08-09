@@ -42,3 +42,39 @@ export async function fetchApi<T>(endpoint: string, options: RequestInit = {}): 
 
   return response.json() as Promise<T>;
 }
+
+/**
+ * Sends a multipart/form-data request with the Bearer authorization header attached.
+ * Does NOT set Content-Type header so browser automatically sets multipart/form-data with boundary.
+ */
+export async function uploadMultipartApi<T>(endpoint: string, formData: FormData): Promise<T> {
+  const token = getStoredToken();
+
+  if (!token) {
+    throw new Error('Not logged in: Authentication token is missing. Please sign in again.');
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error(`Authentication error (${response.status}): ${data.error || 'Session expired or invalid token. Please log in again.'}`);
+    }
+    if (response.status === 400) {
+      throw new Error(`Upload Validation Error: ${data.error || 'Invalid request parameters or file.'}`);
+    }
+    throw new Error(`Upload Failed (${response.status}): ${data.error || 'Server error occurred during upload.'}`);
+  }
+
+  return data as T;
+}

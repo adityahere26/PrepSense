@@ -6,6 +6,8 @@ import authRoutes from './routes/auth.js';
 import successStoriesRoutes from './routes/successStories.js';
 import resourceRoutes from './routes/resources.js';
 
+import resumeRoutes from './routes/resume.js';
+
 dotenv.config();
 
 const app = express();
@@ -33,6 +35,7 @@ app.use(passport.initialize());
 app.use('/api/auth', authRoutes);
 app.use('/api/success-stories', successStoriesRoutes);
 app.use('/api/resources', resourceRoutes);
+app.use('/api/resume', resumeRoutes);
 
 // Health Check Endpoint
 app.get('/api/health', (_req, res) => {

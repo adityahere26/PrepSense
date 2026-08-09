@@ -233,6 +233,7 @@ Each phase below has a ready-to-paste **Antigravity task prompt**. Give it one p
 
 ### Phase 6 — Deploy & Document (Day 12-14)
 - Deploy client to Vercel/Netlify and server to Railway/Render as two separate services; connect Neon + Upstash + R2 in the server's production env vars, and point the client's API base URL at the deployed server. Double-check CORS origin and cookie/JWT settings work cross-origin in production, not just localhost.
+- **Google OAuth brand verification**: once the client has a real deployed domain, verify domain ownership in Google Search Console, confirm the landing page publicly describes the app (not just a login screen), publish a Privacy Policy page on the same domain and link it in the OAuth consent screen, then submit for Brand Verification (basic Sign-In scopes only — ~2-3 business days, not the full sensitive-scope review). Until this completes, add specific reviewer/recruiter emails to the OAuth consent screen's test user list so their login doesn't hit "Access denied."
 - Write a README covering problem, architecture decisions (why a separate client/server split, the queue-skipping decision, turn-based vs streaming voice, etc.) — this doubles as interview talking points.
 - Record a 2-minute demo video: upload resume → get analysis → run a mock interview question → show the summary.
 - Write a one-page case study (problem → approach → what you'd do differently at scale) for your portfolio/LinkedIn.

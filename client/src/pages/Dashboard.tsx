@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { FileText, Mic, Sparkles, CheckCircle2, User, Plus, MessageSquarePlus, Send, Clock, AlertCircle } from 'lucide-react';
+import { FileText, Mic, Sparkles, CheckCircle2, User, Plus, MessageSquarePlus, Send, Clock, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
+import { ResumeUploadForm } from '../components/ResumeUploadForm';
+import { ParsedResumeView } from '../components/ParsedResumeView';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -15,6 +17,54 @@ export const Dashboard: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Resume states
+  const [latestResume, setLatestResume] = useState<any | null>(null);
+  const [isLoadingResume, setIsLoadingResume] = useState<boolean>(true);
+  const [showUploadForm, setShowUploadForm] = useState<boolean>(false);
+  const [resumeCount, setResumeCount] = useState<number>(0);
+  const [userTargetRole, setUserTargetRole] = useState<string | null>(user?.targetRole || null);
+
+  // Fetch user's latest resume on mount
+  useEffect(() => {
+    fetchLatestResume();
+  }, [token]);
+
+  const fetchLatestResume = async () => {
+    if (!token) return;
+    setIsLoadingResume(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/resume/latest`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setLatestResume(data.resume);
+        if (data.targetRole) {
+          setUserTargetRole(data.targetRole);
+        }
+        if (data.resume) {
+          setResumeCount(1);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch latest resume:', err);
+    } finally {
+      setIsLoadingResume(false);
+    }
+  };
+
+  const handleUploadSuccess = (uploadedResume: any) => {
+    setLatestResume(uploadedResume);
+    if (uploadedResume?.targetRole) {
+      setUserTargetRole(uploadedResume.targetRole);
+      setRoleAchieved(uploadedResume.targetRole);
+    }
+    setResumeCount((prev) => (prev > 0 ? prev : 1));
+    setShowUploadForm(false);
+  };
 
   const handleSubmitStory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,7 +90,7 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           authorName: authorName.trim() || user?.name || user?.email,
-          roleAchieved: roleAchieved.trim() || undefined,
+          roleAchieved: roleAchieved.trim() || userTargetRole || undefined,
           content: content.trim(),
         }),
       });
@@ -73,16 +123,19 @@ export const Dashboard: React.FC = () => {
             Welcome back, {user?.name || user?.email}!
           </h1>
           <p className="text-slate-600 text-sm">
-            {user?.targetRole
-              ? `Target Role: ${user.targetRole}`
+            {userTargetRole
+              ? `Target Role: ${userTargetRole}`
               : 'Target role not set yet — upload a resume to configure.'}
           </p>
         </div>
 
         <div className="flex items-center gap-3 z-10">
-          <Button className="px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-sm transition-all shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44]">
+          <Button
+            onClick={() => setShowUploadForm(!showUploadForm)}
+            className="px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-sm transition-all shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44]"
+          >
             <Plus className="w-4 h-4 text-teal-300" />
-            Upload Resume
+            {showUploadForm ? 'Cancel Upload' : latestResume ? 'Re-upload Resume' : 'Upload Resume'}
           </Button>
         </div>
 
@@ -109,8 +162,10 @@ export const Dashboard: React.FC = () => {
             <FileText className="w-4 h-4 text-[#06b6d4]" />
           </CardHeader>
           <CardContent className="p-0 space-y-1">
-            <p className="text-3xl font-extrabold text-[#043c44]">0</p>
-            <CardDescription className="text-xs text-slate-500">Ready for Phase 1 Upload Flow</CardDescription>
+            <p className="text-3xl font-extrabold text-[#043c44]">{resumeCount}</p>
+            <CardDescription className="text-xs text-slate-500">
+              {latestResume ? 'Active resume ready for AI analysis' : 'Upload a PDF/DOCX resume'}
+            </CardDescription>
           </CardContent>
         </Card>
 
@@ -125,6 +180,25 @@ export const Dashboard: React.FC = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Upload Form or Parsed Resume View */}
+      {isLoadingResume ? (
+        <Card className="glass-panel p-12 rounded-3xl text-center space-y-3 border-teal-100 bg-white/90 shadow-xs">
+          <Loader2 className="w-8 h-8 text-[#0d9488] animate-spin mx-auto" />
+          <p className="text-sm font-semibold text-[#043c44]">Loading workspace resume data...</p>
+        </Card>
+      ) : showUploadForm || !latestResume ? (
+        <ResumeUploadForm
+          initialTargetRole={userTargetRole || ''}
+          onUploadSuccess={handleUploadSuccess}
+          onCancel={latestResume ? () => setShowUploadForm(false) : undefined}
+        />
+      ) : (
+        <ParsedResumeView
+          resume={latestResume}
+          onReupload={() => setShowUploadForm(true)}
+        />
+      )}
 
       {/* Share Your Success Story Form Section */}
       <Card className="glass-panel p-8 rounded-3xl border-teal-100 bg-white/90 shadow-sm space-y-6">
@@ -227,23 +301,6 @@ export const Dashboard: React.FC = () => {
           </div>
         </form>
       </Card>
-
-      {/* Placeholder Empty State */}
-      <Card className="glass-panel p-12 rounded-3xl text-center space-y-4 border-dashed border-teal-200 bg-white/90 shadow-xs">
-        <div className="w-12 h-12 rounded-2xl bg-teal-50 text-[#0d9488] border border-teal-200/60 flex items-center justify-center mx-auto">
-          <Sparkles className="w-6 h-6" />
-        </div>
-        <CardHeader className="p-0">
-          <CardTitle className="font-heading font-bold text-xl text-[#043c44]">Your Workspace is Ready</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <CardDescription className="text-slate-600 text-sm max-w-md mx-auto">
-            The monorepo architecture, Express JWT server, and protected React client route are successfully linked!
-          </CardDescription>
-        </CardContent>
-      </Card>
     </div>
   );
 };
-
-

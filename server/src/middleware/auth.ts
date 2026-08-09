@@ -34,16 +34,31 @@ export function authenticateJWT(req: Request, res: Response, next: NextFunction)
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or invalid token format' });
+    console.warn(`🔒 Auth Failure [${req.method} ${req.path}]: Missing or invalid Authorization header. Header value:`, authHeader || '(none)');
+    return res.status(401).json({ error: 'Unauthorized: Missing or invalid Authorization header format' });
   }
 
   const token = authHeader.split(' ')[1];
+
+  if (!token || token.trim() === '') {
+    console.warn(`🔒 Auth Failure [${req.method} ${req.path}]: Bearer token is empty`);
+    return res.status(401).json({ error: 'Unauthorized: Empty Bearer token' });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as UserPayload;
     req.user = decoded;
     next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
+  } catch (error: any) {
+    console.error(`🔒 Auth Failure [${req.method} ${req.path}]: JWT Verification Error - Name: "${error.name}", Message: "${error.message}"`);
+
+    let clientErrorMessage = 'Unauthorized: Token verification failed';
+    if (error.name === 'TokenExpiredError') {
+      clientErrorMessage = 'Unauthorized: JWT token has expired. Please sign in again.';
+    } else if (error.name === 'JsonWebTokenError') {
+      clientErrorMessage = `Unauthorized: Invalid JWT signature or malformed token (${error.message})`;
+    }
+
+    return res.status(401).json({ error: clientErrorMessage });
   }
 }
