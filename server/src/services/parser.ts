@@ -1,4 +1,4 @@
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 
 export async function extractTextFromFile(
@@ -12,9 +12,18 @@ export async function extractTextFromFile(
 
   if (mimeType === 'application/pdf' || extension === 'pdf') {
     try {
-      const parseFunc = (pdfParse as any).default || pdfParse;
-      const data = await parseFunc(fileBuffer);
-      rawText = data.text;
+      if (PDFParse && typeof (PDFParse.prototype as any)?.getText === 'function') {
+        // PDFParse v2 class instance API (pdf-parse 2.x)
+        const parser = new PDFParse({ data: fileBuffer });
+        const textResult = await parser.getText();
+        rawText = textResult.text || '';
+        await parser.destroy();
+      } else {
+        // Fallback for legacy pdf-parse 1.x default function export
+        const parseFunc = (PDFParse as any).default || PDFParse;
+        const data = await parseFunc(fileBuffer);
+        rawText = data.text || '';
+      }
     } catch (err: any) {
       throw new Error(`Failed to parse PDF document: ${err.message || 'Corrupt or unreadable PDF file'}`);
     }
@@ -25,7 +34,7 @@ export async function extractTextFromFile(
   ) {
     try {
       const result = await mammoth.extractRawText({ buffer: fileBuffer });
-      rawText = result.value;
+      rawText = result.value || '';
     } catch (err: any) {
       throw new Error(`Failed to parse DOCX document: ${err.message || 'Corrupt or unreadable DOCX file'}`);
     }
