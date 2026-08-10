@@ -7,6 +7,7 @@ import successStoriesRoutes from './routes/successStories.js';
 import resourceRoutes from './routes/resources.js';
 
 import resumeRoutes from './routes/resume.js';
+import interviewRoutes from './routes/interview.js';
 
 dotenv.config();
 
@@ -36,6 +37,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/success-stories', successStoriesRoutes);
 app.use('/api/resources', resourceRoutes);
 app.use('/api/resume', resumeRoutes);
+app.use('/api/interview', interviewRoutes);
 
 // Health Check Endpoint
 app.get('/api/health', (_req, res) => {

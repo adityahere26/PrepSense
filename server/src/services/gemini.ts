@@ -517,3 +517,175 @@ function fallbackHeuristicAnalysis(parsedResumeJson: any, targetRole: string, jd
     ],
   };
 }
+
+export interface GeneratedInterviewQuestion {
+  category: string;
+  questionText: string;
+}
+
+export interface InterviewQuestionsResult {
+  source?: 'ai' | 'heuristic_fallback';
+  modelUsed?: string;
+  categories: string[];
+  questions: GeneratedInterviewQuestion[];
+}
+
+const interviewQuestionsJsonSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    categories: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: 'List of 4-5 core interview question categories tailored to the target role.',
+    },
+    questions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          category: {
+            type: Type.STRING,
+            description: 'One of the inferred categories above that this question belongs to.',
+          },
+          questionText: {
+            type: Type.STRING,
+            description: 'The personalized, clear interview question referencing candidate projects, skills, or experience.',
+          },
+        },
+        required: ['category', 'questionText'],
+      },
+      description: 'List of 5-7 interview questions distributed across the inferred categories.',
+    },
+  },
+  required: ['categories', 'questions'],
+};
+
+export async function generateInterviewQuestionsWithGemini(
+  targetRole: string,
+  parsedResumeJson?: any
+): Promise<InterviewQuestionsResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    console.warn('⚠️ Gemini API key is missing. Executing local heuristic interview question generation fallback.');
+    return fallbackHeuristicQuestions(targetRole, parsedResumeJson);
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const prompt = `
+You are an expert technical recruiter, hiring manager, and interviewer conducting a high-stakes interview for the target role: "${targetRole}".
+
+Task:
+1. **Infer 4-5 Interview Question Categories**: First, infer 4 to 5 appropriate interview question categories specifically tailored for the target role "${targetRole}".
+   - Examples of role-to-category mappings:
+     - "Software Engineer" → ["technical", "system_design", "behavioral", "problem_solving"]
+     - "Product Manager" → ["product_sense", "execution", "behavioral", "metrics"]
+     - "Digital Marketer" → ["campaign_strategy", "analytics", "behavioral", "creative_thinking"]
+     - Adjust dynamically for any role (e.g. Data Scientist, UX Designer, Financial Analyst, Marketing Specialist).
+
+2. **Generate 5-7 Personalized Questions**: Generate between 5 and 7 realistic interview questions distributed across those inferred categories.
+   - **Personalize using candidate's resume**: Incorporate details from the candidate's parsed resume below (skills, projects, work experience, achievements) into the questions where relevant.
+   - For instance, if the candidate lists specific technologies, projects, or past companies, tailor questions to probe their hands-on experience with those tools or scenarios.
+   - If minimal resume data is provided, formulate role-specific questions tailored to standard professional scenarios for "${targetRole}".
+
+Candidate Parsed Resume Data (JSON):
+---
+${parsedResumeJson ? JSON.stringify(parsedResumeJson, null, 2) : 'No structured resume provided.'}
+---
+
+Return strictly valid JSON matching the specified schema with:
+- "categories": Array of 4-5 category strings.
+- "questions": Array of 5-7 objects, each with "category" (matching one of the inferred categories) and "questionText".
+`;
+
+  const modelsToTry = await getAvailableGeminiModels(ai);
+
+  for (const modelName of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: interviewQuestionsJsonSchema,
+          temperature: 0.3,
+        },
+      });
+
+      const responseText = response.text;
+      if (responseText) {
+        const result: InterviewQuestionsResult = JSON.parse(responseText);
+        if (result.categories && Array.isArray(result.categories) && result.questions && Array.isArray(result.questions) && result.questions.length > 0) {
+          result.source = 'ai';
+          result.modelUsed = modelName;
+          console.log(`✨ Successfully generated interview questions using Gemini API model: ${modelName}`);
+          return result;
+        }
+      }
+    } catch (error: any) {
+      console.warn(`Gemini model ${modelName} question generation failed. Trying next model... Error:`, error?.message || error);
+    }
+  }
+
+  console.warn('⚠️ All Gemini API models unavailable or rate limited for question generation. Executing local heuristic fallback.');
+  return fallbackHeuristicQuestions(targetRole, parsedResumeJson);
+}
+
+function fallbackHeuristicQuestions(targetRole: string, parsedResumeJson?: any): InterviewQuestionsResult {
+  const roleLower = targetRole.toLowerCase();
+  let categories: string[];
+
+  if (roleLower.includes('software') || roleLower.includes('developer') || roleLower.includes('engineer')) {
+    categories = ['technical', 'system_design', 'behavioral', 'problem_solving'];
+  } else if (roleLower.includes('product') || roleLower.includes('pm')) {
+    categories = ['product_sense', 'execution', 'behavioral', 'metrics'];
+  } else if (roleLower.includes('market') || roleLower.includes('growth')) {
+    categories = ['campaign_strategy', 'analytics', 'behavioral', 'creative_thinking'];
+  } else {
+    categories = ['domain_knowledge', 'strategy', 'behavioral', 'problem_solving'];
+  }
+
+  const skills: string[] = parsedResumeJson?.skills || [];
+  const projects = parsedResumeJson?.projects || [];
+  const experiences = parsedResumeJson?.workExperience || [];
+
+  const topSkill = skills[0] || 'your core technical tools';
+  const topProject = projects[0]?.title || 'a major project from your experience';
+  const topCompany = experiences[0]?.company || 'your previous position';
+
+  const questions: GeneratedInterviewQuestion[] = [
+    {
+      category: categories[0],
+      questionText: `Could you walk me through a complex technical challenge you faced while working with ${topSkill} at ${topCompany}, and how you resolved it?`,
+    },
+    {
+      category: categories[1] || categories[0],
+      questionText: `When designing or architecting systems for ${targetRole}, how do you approach scalability, maintainability, and performance optimization?`,
+    },
+    {
+      category: categories[2] || 'behavioral',
+      questionText: `Tell me about a time when you had to manage conflicting priorities or tight deadlines while working on ${topProject}. How did you handle stakeholder expectations?`,
+    },
+    {
+      category: categories[3] || 'problem_solving',
+      questionText: `Describe a situation where a critical bug or production issue occurred. Walk me through your step-by-step diagnostic and resolution process.`,
+    },
+    {
+      category: categories[0],
+      questionText: `How do you stay up-to-date with emerging industry best practices and apply new methodologies to your daily work in ${targetRole}?`,
+    },
+    {
+      category: categories[2] || 'behavioral',
+      questionText: `Can you give an example of how you collaborated with cross-functional team members to deliver a key business milestone?`,
+    },
+  ];
+
+  return {
+    source: 'heuristic_fallback',
+    modelUsed: undefined,
+    categories,
+    questions,
+  };
+}
+
