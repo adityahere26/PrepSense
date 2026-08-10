@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   FileText,
@@ -37,7 +38,8 @@ export interface ResumeGroupItem {
 
 export const Dashboard: React.FC = () => {
   const { user, token } = useAuth();
-  
+  const navigate = useNavigate();
+
   const [authorName, setAuthorName] = useState(user?.name || '');
   const [roleAchieved, setRoleAchieved] = useState(user?.targetRole || '');
   const [content, setContent] = useState('');
@@ -52,6 +54,39 @@ export const Dashboard: React.FC = () => {
   const [showUploadForm, setShowUploadForm] = useState<boolean>(false);
   const [targetUploadGroupId, setTargetUploadGroupId] = useState<string | undefined>(undefined);
   const [userTargetRole, setUserTargetRole] = useState<string | null>(user?.targetRole || null);
+
+  // Voice Interview starting state
+  const [isStartingInterview, setIsStartingInterview] = useState<boolean>(false);
+
+  const handleStartMockInterview = async (resumeId: string, targetRole: string) => {
+    if (!token) return;
+    setIsStartingInterview(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/interview/session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          resumeId,
+          targetRole: targetRole || 'Software Engineer',
+        }),
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success && data.session) {
+        navigate(`/interview/${data.session.id}`);
+      } else {
+        alert(`Failed to create interview session: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Error starting mock interview:', err);
+      alert('Network error initiating mock interview session.');
+    } finally {
+      setIsStartingInterview(false);
+    }
+  };
 
   useEffect(() => {
     fetchResumes();
@@ -366,11 +401,29 @@ export const Dashboard: React.FC = () => {
       {/* Selected Active Resume Workspace */}
       {activeResume && !showUploadForm && (
         <div className="space-y-4 pt-4">
-          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
             <h3 className="font-heading font-extrabold text-xl text-[#043c44] flex items-center gap-2">
               <Layers className="w-5 h-5 text-[#0d9488]" />
               Active Workspace: {activeResume.targetRole || 'Resume Workspace'} (v{activeResume.version})
             </h3>
+
+            <Button
+              onClick={() => handleStartMockInterview(activeResume.id, activeResume.targetRole || 'Software Engineer')}
+              disabled={isStartingInterview}
+              className="px-5 py-2.5 h-auto rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white font-bold text-xs transition-all shadow-md shadow-teal-600/20 flex items-center gap-2"
+            >
+              {isStartingInterview ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-teal-200" />
+                  Starting Interview...
+                </>
+              ) : (
+                <>
+                  <Mic className="w-4 h-4 text-teal-200 animate-pulse" />
+                  Start Mock Interview
+                </>
+              )}
+            </Button>
           </div>
 
           <ParsedResumeView

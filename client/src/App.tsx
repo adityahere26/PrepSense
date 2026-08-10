@@ -8,6 +8,7 @@ import { Home } from './pages/Home';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
 import { Dashboard } from './pages/Dashboard';
+import { InterviewSession } from './pages/InterviewSession';
 import { Resources } from './pages/Resources';
 import { ResourceDetail } from './pages/ResourceDetail';
 
@@ -46,6 +47,14 @@ export const App: React.FC = () => {
                   element={
                     <ProtectedRoute>
                       <Dashboard />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/interview/:sessionId"
+                  element={
+                    <ProtectedRoute>
+                      <InterviewSession />
                     </ProtectedRoute>
                   }
                 />

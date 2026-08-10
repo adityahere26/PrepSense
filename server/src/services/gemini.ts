@@ -689,3 +689,86 @@ function fallbackHeuristicQuestions(targetRole: string, parsedResumeJson?: any):
   };
 }
 
+export async function generateQuestionTTSWithGemini(
+  questionText: string
+): Promise<{ audioBuffer: Buffer; mimeType: string }> {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    console.warn('⚠️ Gemini API key is missing for TTS. Returning synthetic WAV audio fallback.');
+    return generateFallbackTTSAudioBuffer(questionText);
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `Please read this interview question out loud clearly and naturally: "${questionText}"`;
+
+  const ttsModels = [
+    'gemini-2.5-flash-preview-tts',
+    'gemini-3.5-flash',
+    'gemini-2.5-flash-native-audio-latest',
+    'gemini-2.0-flash',
+  ];
+
+  for (const modelName of ttsModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: 'Puck',
+              },
+            },
+          },
+        },
+      });
+
+      const candidate = response.candidates?.[0];
+      const parts = candidate?.content?.parts;
+      if (parts && parts.length > 0) {
+        for (const part of parts) {
+          if (part.inlineData && part.inlineData.data) {
+            const buffer = Buffer.from(part.inlineData.data, 'base64');
+            const mimeType = part.inlineData.mimeType || 'audio/mp3';
+            console.log(`✨ Generated native TTS audio with Gemini model ${modelName} (${buffer.length} bytes, ${mimeType})`);
+            return { audioBuffer: buffer, mimeType };
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn(`Gemini model ${modelName} TTS audio generation call failed. Error:`, err?.message || err);
+    }
+  }
+
+  console.warn('⚠️ All Gemini TTS model calls unavailable. Returning synthetic WAV audio fallback.');
+  return generateFallbackTTSAudioBuffer(questionText);
+}
+
+function generateFallbackTTSAudioBuffer(text: string): { audioBuffer: Buffer; mimeType: string } {
+  // Valid 1-second 8kHz 16-bit mono PCM WAV audio buffer
+  const sampleRate = 8000;
+  const numSamples = sampleRate * 1;
+  const buffer = Buffer.alloc(44 + numSamples * 2);
+
+  // RIFF header
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + numSamples * 2, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(numSamples * 2, 40);
+
+  return { audioBuffer: buffer, mimeType: 'audio/wav' };
+}
+
+

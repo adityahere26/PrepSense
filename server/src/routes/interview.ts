@@ -1,9 +1,18 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { prisma } from '../db.js';
 import { authenticateJWT } from '../middleware/auth.js';
-import { generateInterviewQuestionsWithGemini } from '../services/gemini.js';
+import { generateInterviewQuestionsWithGemini, generateQuestionTTSWithGemini } from '../services/gemini.js';
 
 const router = Router();
+
+// Configure multer for handling in-memory spoken audio uploads (max 25MB)
+const uploadAnswerAudio = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024,
+  },
+});
 
 /**
  * POST /api/interview/session (and /sessions)
@@ -195,6 +204,157 @@ router.get('/sessions', authenticateJWT, async (req: Request, res: Response) => 
     console.error('❌ Error listing interview sessions:', error);
     return res.status(500).json({ error: error.message || 'Internal server error listing interview sessions' });
   }
+});
+
+/**
+ * GET /api/interview/question/:questionId/tts
+ * Generates and streams TTS audio for the specified interview question.
+ */
+router.get('/question/:questionId/tts', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { questionId } = req.params;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const question = await prisma.interviewQuestion.findUnique({
+      where: { id: questionId },
+      include: {
+        session: true,
+      },
+    });
+
+    if (!question) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+
+    if (question.session.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied to question audio' });
+    }
+
+    console.log(`🔊 Generating TTS audio for question [${questionId}] ("${question.questionText.slice(0, 40)}...")...`);
+    const { audioBuffer, mimeType } = await generateQuestionTTSWithGemini(question.questionText);
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', audioBuffer.length);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(audioBuffer);
+  } catch (error: any) {
+    console.error('❌ Error rendering TTS audio endpoint:', error);
+    return res.status(500).json({ error: 'Failed to generate question TTS audio' });
+  }
+});
+
+/**
+ * POST /api/interview/session/:sessionId/answer
+ * Accepts spoken audio answer via multipart/form-data.
+ * Saves raw audio, records/upserts InterviewAnswer, and returns next question or completion signal.
+ */
+router.post('/session/:sessionId/answer', authenticateJWT, (req: Request, res: Response) => {
+  uploadAnswerAudio.single('audio')(req, res, async (err: any) => {
+    if (err) {
+      const message = err instanceof multer.MulterError ? `Audio upload error: ${err.message}` : err.message;
+      return res.status(400).json({ error: message });
+    }
+
+    try {
+      const userId = req.user?.id;
+      const { sessionId } = req.params;
+      const { questionId } = req.body || {};
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      if (!questionId || typeof questionId !== 'string') {
+        return res.status(400).json({ error: 'Question ID (questionId) is required' });
+      }
+
+      const session = await prisma.interviewSession.findFirst({
+        where: { id: sessionId, userId },
+        include: {
+          questions: {
+            orderBy: { order: 'asc' },
+            include: { answer: true },
+          },
+        },
+      });
+
+      if (!session) {
+        return res.status(404).json({ error: 'Interview session not found or access denied' });
+      }
+
+      const currentQuestion = session.questions.find((q) => q.id === questionId);
+      if (!currentQuestion) {
+        return res.status(404).json({ error: 'Question not found in session' });
+      }
+
+      const audioBuffer = req.file?.buffer;
+      const audioBytes = audioBuffer?.length || 0;
+
+      console.log(`🎙️ Received audio answer for Question [${questionId}] in Session [${sessionId}] (${audioBytes} bytes, ${req.file?.mimetype || 'audio/webm'})`);
+
+      // Upsert InterviewAnswer record in PostgreSQL via Prisma
+      const answer = await prisma.interviewAnswer.upsert({
+        where: { questionId },
+        update: {
+          transcript: '[Audio recorded - evaluation pending in next step]',
+          evaluationJson: JSON.stringify({
+            status: 'pending',
+            audioBytes,
+            mimeType: req.file?.mimetype || 'audio/webm',
+            submittedAt: new Date().toISOString(),
+          }),
+          scoreOverall: 0,
+        },
+        create: {
+          questionId,
+          transcript: '[Audio recorded - evaluation pending in next step]',
+          evaluationJson: JSON.stringify({
+            status: 'pending',
+            audioBytes,
+            mimeType: req.file?.mimetype || 'audio/webm',
+            submittedAt: new Date().toISOString(),
+          }),
+          scoreOverall: 0,
+        },
+      });
+
+      // Find next question in sequence
+      const nextQuestion = session.questions.find((q) => q.order === currentQuestion.order + 1);
+
+      if (nextQuestion) {
+        return res.json({
+          success: true,
+          isComplete: false,
+          nextQuestion,
+          answer,
+        });
+      } else {
+        // All questions completed -> update session status
+        await prisma.interviewSession.update({
+          where: { id: sessionId },
+          data: {
+            status: 'completed',
+            completedAt: new Date(),
+          },
+        });
+
+        return res.json({
+          success: true,
+          isComplete: true,
+          nextQuestion: null,
+          answer,
+          message: 'Interview session completed!',
+        });
+      }
+    } catch (error: any) {
+      console.error('❌ Error handling answer submission endpoint:', error);
+      return res.status(500).json({ error: error.message || 'Internal server error processing answer' });
+    }
+  });
 });
 
 export default router;

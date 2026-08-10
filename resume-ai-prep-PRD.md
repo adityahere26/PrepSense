@@ -91,7 +91,7 @@ Fresher or early-career candidate from any field (tech, product, marketing, fina
 - Self-reported confidence delta (simple 1-5 rating pre/post, shown in session summary)
 
 ## 8. Open Questions
-- STT provider choice: Deepgram vs OpenAI Whisper API — decide based on latency in testing (engineering, non-blocking, decide in Phase 3)
+- ~~STT provider choice~~ — resolved: using Gemini's native audio understanding for transcription, no separate STT provider needed
 - Store raw audio or just transcripts? Storing audio adds R2 cost + privacy surface area for little extra value — default to transcripts only, revisit if demo needs playback (product, non-blocking)
 
 ---
@@ -107,8 +107,8 @@ Built as a **client-server split** — matches your Campus Cloud pattern (separa
 - **Auth:** Google OAuth via Passport.js (`passport-google-oauth20`) on the server → issues a JWT → client stores it and sends it as a Bearer token on every request
 - **File upload:** Multer on the server (memory storage) → streamed to Cloudflare R2
 - **AI/LLM:** Gemini API (`gemini-3-flash` or similar) via `@google/genai` SDK — structured extraction, analysis, question gen, answer evaluation (all as JSON-schema-constrained calls), called server-side only (never expose the API key to the client). Free tier via Google AI Studio (1,500 requests/day) comfortably covers this project end to end — no billing setup needed.
-- **TTS:** ElevenLabs (you already run this in production for Project Earth — reuse the same account/patterns), called server-side
-- **STT:** Deepgram (or Whisper API as fallback), called server-side
+- **TTS:** Gemini native audio generation (e.g. `gemini-3.1-flash-tts-preview` or current equivalent — resolve dynamically the same way as the text models), called server-side. 30+ voices, natural-language style control, free tier with rate limits — no separate account needed.
+- **STT:** Gemini native audio understanding — send the recorded answer audio directly to a Gemini multimodal call for transcription, called server-side. Same API key, same free tier as everything else.
 - **File storage:** Cloudflare R2 (resume files + generated TTS audio; S3-compatible, 10GB free permanently — requires a card on file for activation, but no charge unless you exceed the free tier)
 - **Cache/rate-limit:** Upstash Redis, used via `express-rate-limit` + a Redis store
 - **Deployment:** frontend on Vercel/Netlify (static build), backend on Railway or Render (Express needs a persistent process, not a serverless function — this also means no serverless timeout to worry about for long LLM/audio calls)
@@ -120,7 +120,7 @@ Built as a **client-server split** — matches your Campus Cloud pattern (separa
 ### Core data flow — Voice Interview
 ```
 1. Client: session start request → Server: LLM generates 5-7 questions (resume + role context) → stored, order fixed → returns first question
-2. Client requests TTS for question N → Server: TTS(question text) via ElevenLabs → audio URL/stream returned → client plays it
+2. Client requests TTS for question N → Server: TTS(question text) via Gemini native audio generation → audio returned → client plays it
 3. Client records answer (MediaRecorder API) → uploads audio blob to Server → Server: STT → transcript
 4. Server: transcript → LLM evaluation (STAR structure, specificity, relevance) → score + feedback stored → returns next question
 5. Repeat for N+1 → after last question → Server: LLM generates session summary → returned to client
@@ -220,8 +220,8 @@ Each phase below has a ready-to-paste **Antigravity task prompt**. Give it one p
 ### Phase 3 — Voice Interview Module (Day 5-7, the core differentiator — give this the most time)
 > **Antigravity prompt (break into sub-tasks if the agent's plan looks too large):**
 > 1. "Build session creation: given a resumeId and a free-text targetRole, first prompt the LLM to infer 4-5 appropriate interview question categories for that specific role (e.g. for 'Software Engineer' → technical, system_design, behavioral, problem_solving; for 'Product Manager' → product_sense, execution, behavioral, metrics; for 'Digital Marketer' → campaign_strategy, analytics, behavioral, creative_thinking). Then generate 5-7 questions distributed across those categories, personalized using resume content. Save as InterviewQuestion records with the LLM-assigned category label."
-> 2. "Build the interview session UI in the React client: display the current question, request its TTS audio from the server (Express route calling ElevenLabs) and auto-play the returned audio URL, show a record button using the browser MediaRecorder API, let the user record and stop their answer, then upload the audio blob to the answer endpoint via multipart/form-data."
-> 3. "Build the answer endpoint on the Express server: receive the audio via multer, transcribe it via Deepgram (or Whisper API), send the transcript + question to the LLM for evaluation (STAR structure score, specificity score, relevance score, written feedback), save as InterviewAnswer via Prisma, and return the next question's TTS audio URL (or a session-complete signal on the last question) to the client."
+> 2. "Build the interview session UI in the React client: display the current question, request its TTS audio from the server (Express route calling Gemini's native audio generation) and auto-play the returned audio, show a record button using the browser MediaRecorder API, let the user record and stop their answer, then upload the audio blob to the answer endpoint via multipart/form-data."
+> 3. "Build the answer endpoint on the Express server: receive the audio via multer, transcribe it by sending the audio directly to Gemini for native audio understanding (no separate STT provider), send the transcript + question to Gemini for evaluation (STAR structure score, specificity score, relevance score, written feedback), save as InterviewAnswer via Prisma, and return the next question's TTS audio (or a session-complete signal on the last question) to the client. Use the same dynamic model-resolution pattern already built for resume analysis."
 > 4. "Build the session summary page: overall score, per-question breakdown with transcripts and feedback, and 2 top improvement areas generated by the LLM."
 >
 > Test this phase yourself end to end with your own voice before moving on — this is the part most likely to have real UX rough edges (mic permissions, audio playback timing, silence detection).
@@ -243,4 +243,4 @@ Each phase below has a ready-to-paste **Antigravity task prompt**. Give it one p
 
 ## 11. Cost Awareness (mention this in interviews — it's a real PM signal)
 
-Per session roughly: 1 question-gen LLM call + ~6 TTS calls + ~6 STT calls + ~6 evaluation LLM calls + 1 summary call. The Gemini calls are effectively free at this scale (well within the 1,500 req/day tier). **ElevenLabs and Deepgram/Whisper are your real cost drivers** — both are paid per character/minute even on free tiers with hard caps, unlike Gemini's request-based free tier. Keep an eye on ElevenLabs character limits and Deepgram/Whisper per-minute pricing during testing, and cap free sessions per user (the P1 rate limiting) before you demo this publicly so a stress-test doesn't blow through those limits.
+Per session roughly: 1 question-gen LLM call + ~6 TTS calls + ~6 STT calls + ~6 evaluation LLM calls + 1 summary call — all Gemini, all within the same 1,500 req/day free tier. This is a meaningful simplification over separate TTS/STT vendors: one API key, one rate limit to watch, no per-character/per-minute billing to track. Still worth the P1 rate limiting (cap sessions per user) so a stress-test or bot doesn't burn through the shared daily quota before a real demo.
