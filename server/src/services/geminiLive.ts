@@ -86,43 +86,70 @@ STRICT INTERVIEW PROTOCOL:
           },
           onmessage: (msg: any) => {
             try {
-              console.log(`[GEMINI-LIVE-RECV] Raw message keys:`, Object.keys(msg));
-              if (msg.serverContent) {
-                const sc = msg.serverContent;
-                console.log(`[GEMINI-LIVE-RECV] serverContent flags: turnComplete=${sc.turnComplete}, interrupted=${sc.interrupted}, waitingForInput=${sc.waitingForInput}, modelTurnParts=${sc.modelTurn?.parts?.length || 0}`);
-                
-                if (sc.modelTurn) {
-                  for (const part of sc.modelTurn.parts || []) {
-                    if (part.text) {
-                      console.log(`[GEMINI-LIVE-RECV] modelTurn.part.text: "${part.text}"`);
-                      options.onTranscriptChunk({ text: part.text, sender: 'assistant' });
-                    }
-                    if (part.inlineData && part.inlineData.data) {
-                      console.log(`[GEMINI-LIVE-RECV] modelTurn.part.inlineData audio chunk (${part.inlineData.data.length} base64 chars, ${part.inlineData.mimeType})`);
-                      options.onAudioChunk({
-                        data: part.inlineData.data,
-                        mimeType: part.inlineData.mimeType || 'audio/pcm;rate=24000',
-                      });
+              const msgKeys = Object.keys(msg || {});
+              console.log(`[GEMINI-LIVE-RECV-MSG] 📩 Received Gemini Live message. Top-level keys: [${msgKeys.join(', ')}]`);
+
+              for (const key of msgKeys) {
+                if (key === 'serverContent') {
+                  const sc = msg.serverContent || {};
+                  const scKeys = Object.keys(sc);
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [serverContent] sub-keys: [${scKeys.join(', ')}]`);
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [serverContent] flags: turnComplete=${sc.turnComplete}, interrupted=${sc.interrupted}, waitingForInput=${sc.waitingForInput}, generationComplete=${sc.generationComplete}`);
+
+                  if (sc.modelTurn) {
+                    const parts = sc.modelTurn.parts || [];
+                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── [modelTurn] parts count: ${parts.length}`);
+                    for (const part of parts) {
+                      if (part.text) {
+                        console.log(`[GEMINI-LIVE-RECV-MSG]   │   │   ├── modelTurn.text: "${part.text}"`);
+                        options.onTranscriptChunk({ text: part.text, sender: 'assistant' });
+                      }
+                      if (part.inlineData && part.inlineData.data) {
+                        console.log(`[GEMINI-LIVE-RECV-MSG]   │   │   ├── modelTurn.inlineData audio chunk (${part.inlineData.data.length} base64 chars, ${part.inlineData.mimeType})`);
+                        options.onAudioChunk({
+                          data: part.inlineData.data,
+                          mimeType: part.inlineData.mimeType || 'audio/pcm;rate=24000',
+                        });
+                      }
                     }
                   }
-                }
-                if (sc.outputTranscription?.text) {
-                  console.log(`[GEMINI-LIVE-RECV] outputTranscription text: "${sc.outputTranscription.text}"`);
-                  options.onTranscriptChunk({
-                    text: sc.outputTranscription.text,
-                    sender: 'assistant',
-                  });
-                }
-                if (sc.inputTranscription?.text) {
-                  console.log(`[GEMINI-LIVE-RECV] inputTranscription text: "${sc.inputTranscription.text}"`);
-                  options.onTranscriptChunk({
-                    text: sc.inputTranscription.text,
-                    sender: 'user',
-                  });
-                }
-                if (sc.turnComplete && options.onTurnComplete) {
-                  console.log(`[GEMINI-LIVE-RECV] turnComplete flag received from Gemini`);
-                  options.onTurnComplete();
+                  if (sc.outputTranscription?.text) {
+                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── [outputTranscription] text: "${sc.outputTranscription.text}"`);
+                    options.onTranscriptChunk({
+                      text: sc.outputTranscription.text,
+                      sender: 'assistant',
+                    });
+                  }
+                  if (sc.inputTranscription?.text) {
+                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── 🎤 [inputTranscription] text: "${sc.inputTranscription.text}"`);
+                    options.onTranscriptChunk({
+                      text: sc.inputTranscription.text,
+                      sender: 'user',
+                    });
+                  }
+                  if (sc.interimInputTranscription?.text) {
+                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── 🎤 [interimInputTranscription] text: "${sc.interimInputTranscription.text}"`);
+                    options.onTranscriptChunk({
+                      text: sc.interimInputTranscription.text,
+                      sender: 'user',
+                    });
+                  }
+                  if (sc.turnComplete && options.onTurnComplete) {
+                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   └── 🏁 [turnComplete] flag received from Gemini`);
+                    options.onTurnComplete();
+                  }
+                } else if (key === 'setupComplete') {
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [setupComplete]:`, JSON.stringify(msg.setupComplete));
+                } else if (key === 'usageMetadata') {
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [usageMetadata]:`, JSON.stringify(msg.usageMetadata));
+                } else if (key === 'goAway') {
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [goAway]:`, JSON.stringify(msg.goAway));
+                } else if (key === 'toolCall') {
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [toolCall]:`, JSON.stringify(msg.toolCall));
+                } else if (key === 'toolCallCancellation') {
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [toolCallCancellation]:`, JSON.stringify(msg.toolCallCancellation));
+                } else {
+                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [${key}] (OTHER/UNHANDLED KEY):`, JSON.stringify(msg[key]));
                 }
               }
             } catch (msgErr) {
