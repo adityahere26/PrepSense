@@ -3,19 +3,17 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   Mic,
+  MicOff,
   Square,
-  Play,
-  RotateCcw,
-  Volume2,
-  Send,
-  Loader2,
-  CheckCircle2,
-  ArrowRight,
   Sparkles,
   AlertCircle,
-  Clock,
   ArrowLeft,
-  VolumeX,
+  Loader2,
+  CheckCircle2,
+  Send,
+  Volume2,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -27,11 +25,6 @@ interface QuestionItem {
   order: number;
   category: string;
   questionText: string;
-  answer?: {
-    id: string;
-    transcript: string;
-    scoreOverall: number;
-  } | null;
 }
 
 interface SessionData {
@@ -42,40 +35,86 @@ interface SessionData {
   questions: QuestionItem[];
 }
 
+interface TranscriptEntry {
+  id: string;
+  sender: 'assistant' | 'user';
+  text: string;
+  timestamp: string;
+  isStreaming?: boolean;
+}
+
+// Convert 32-bit Float32Array audio samples to 16-bit PCM Int16 ArrayBuffer
+function floatTo16BitPCM(input: Float32Array): ArrayBuffer {
+  const output = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return output.buffer;
+}
+
+// Convert ArrayBuffer to Base64
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
+// Convert Base64 string to Uint8Array
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = window.atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export const InterviewSession: React.FC = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const { token } = useAuth();
 
   const [session, setSession] = useState<SessionData | null>(null);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Audio TTS states
-  const [isLoadingAudio, setIsLoadingAudio] = useState<boolean>(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  // MediaRecorder Voice States
-  const [isRecording, setIsRecording] = useState<boolean>(false);
-  const [recordingTime, setRecordingTime] = useState<number>(0);
-  const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
-  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-
-  // Completion state
+  // Real-Time Live Session States
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  const [isMicActive, setIsMicActive] = useState<boolean>(false);
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  // Web API References
+  const wsRef = useRef<WebSocket | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const micAudioCtxRef = useRef<AudioContext | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+
+  // Output Audio Context for PCM Playback
+  const playbackAudioCtxRef = useRef<AudioContext | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
+
+  const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (sessionId && token) {
       fetchSessionDetails();
     }
+    return () => {
+      stopLiveSession();
+    };
   }, [sessionId, token]);
+
+  // Auto-scroll transcript container
+  useEffect(() => {
+    if (transcriptScrollRef.current) {
+      transcriptScrollRef.current.scrollTop = transcriptScrollRef.current.scrollHeight;
+    }
+  }, [transcripts]);
 
   const fetchSessionDetails = async () => {
     setIsLoading(true);
@@ -90,12 +129,7 @@ export const InterviewSession: React.FC = () => {
       const data = await res.json();
       if (res.ok && data.success && data.session) {
         setSession(data.session);
-
-        // Find first unanswered question or default to first question
-        const firstUnansweredIndex = data.session.questions.findIndex((q: QuestionItem) => !q.answer);
-        if (firstUnansweredIndex !== -1) {
-          setCurrentQuestionIndex(firstUnansweredIndex);
-        } else if (data.session.status === 'completed') {
+        if (data.session.status === 'completed') {
           setIsCompleted(true);
         }
       } else {
@@ -109,192 +143,255 @@ export const InterviewSession: React.FC = () => {
     }
   };
 
-  const currentQuestion = session?.questions[currentQuestionIndex];
+  // Start Real-time Live Interview Session via WebSocket
+  const startLiveInterview = async () => {
+    if (!sessionId) return;
 
-  // Auto-play TTS audio when current question changes
-  useEffect(() => {
-    if (currentQuestion && token && !isCompleted) {
-      fetchAndPlayQuestionTTS(currentQuestion.id);
-    }
-    return () => {
-      stopAudioPlayback();
-      cleanupRecordedAudioUrl();
-    };
-  }, [currentQuestionIndex, isCompleted]);
-
-  const fetchAndPlayQuestionTTS = async (questionId: string) => {
-    stopAudioPlayback();
-    setIsLoadingAudio(true);
+    setConnectionStatus('connecting');
+    setErrorMessage(null);
+    setTranscripts([]);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/interview/question/${questionId}/tts`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
+      // 1. Initialize Web Audio API context for output PCM playback
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      const playbackCtx = new AudioCtxClass({ sampleRate: 24000 });
+      playbackAudioCtxRef.current = playbackCtx;
+      nextPlayTimeRef.current = playbackCtx.currentTime;
+
+      // 2. Request microphone permission and setup mic input streaming at 16kHz PCM
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 16000,
         },
       });
+      mediaStreamRef.current = stream;
 
-      if (!res.ok) {
-        throw new Error('TTS endpoint error');
-      }
+      const micCtx = new AudioCtxClass({ sampleRate: 16000 });
+      micAudioCtxRef.current = micCtx;
 
-      const audioBlob = await res.blob();
-      const objectUrl = URL.createObjectURL(audioBlob);
+      const source = micCtx.createMediaStreamSource(stream);
+      const processor = micCtx.createScriptProcessor(4096, 1, 1);
+      scriptProcessorRef.current = processor;
 
-      const audio = new Audio(objectUrl);
-      audioRef.current = audio;
+      source.connect(processor);
+      processor.connect(micCtx.destination);
 
-      audio.onplay = () => setIsPlayingAudio(true);
-      audio.onended = () => {
-        setIsPlayingAudio(false);
-        URL.revokeObjectURL(objectUrl);
-      };
-      audio.onerror = () => {
-        setIsPlayingAudio(false);
-        setIsLoadingAudio(false);
-      };
+      let chunkSentCount = 0;
+      processor.onaudioprocess = (event) => {
+        const inputData = event.inputBuffer.getChannelData(0);
+        const pcmBuffer = floatTo16BitPCM(inputData);
+        const base64Audio = arrayBufferToBase64(pcmBuffer);
 
-      setIsLoadingAudio(false);
-      await audio.play().catch((playErr) => {
-        console.warn('Autoplay prevented by browser policy:', playErr);
-        setIsPlayingAudio(false);
-      });
-    } catch (err) {
-      console.warn('Could not auto-play question audio:', err);
-      setIsLoadingAudio(false);
-      setIsPlayingAudio(false);
-    }
-  };
-
-  const stopAudioPlayback = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    setIsPlayingAudio(false);
-  };
-
-  const cleanupRecordedAudioUrl = () => {
-    if (recordedAudioUrl) {
-      URL.revokeObjectURL(recordedAudioUrl);
-      setRecordedAudioUrl(null);
-    }
-    setRecordedAudioBlob(null);
-  };
-
-  // Voice Recording Logic (MediaRecorder API)
-  const startRecording = async () => {
-    stopAudioPlayback();
-    cleanupRecordedAudioUrl();
-    setRecordingTime(0);
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          chunkSentCount++;
+          if (chunkSentCount % 20 === 1) {
+            console.log(`[CLIENT-WS-SEND] Streaming PCM Audio Chunk #${chunkSentCount} (${base64Audio.length} base64 chars)`);
+          }
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'audio',
+              data: base64Audio,
+              mimeType: 'audio/pcm;rate=16000',
+            })
+          );
         }
       };
 
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const url = URL.createObjectURL(audioBlob);
-        setRecordedAudioBlob(audioBlob);
-        setRecordedAudioUrl(url);
+      setIsMicActive(true);
 
-        // Stop media tracks
-        stream.getTracks().forEach((track) => track.stop());
+      // 3. Connect to WebSocket server endpoint
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsHost = API_BASE_URL.replace(/^https?:\/\//, '');
+      const wsUrl = `${wsProtocol}//${wsHost}/api/interview/live?sessionId=${sessionId}`;
+
+      console.log('[CLIENT-WS] Connecting to WebSocket endpoint:', wsUrl);
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('[CLIENT-WS] ⚡ WebSocket connected successfully to server');
+        setConnectionStatus('connected');
       };
 
-      mediaRecorder.start(200);
-      setIsRecording(true);
+      let audioChunkRecvCount = 0;
 
-      // Start timer
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === 'connected') {
+            console.log('[CLIENT-WS-RECV] Type "connected":', msg);
+          } else if (msg.type === 'transcript') {
+            console.log(`[CLIENT-WS-RECV] Type "transcript" [sender=${msg.sender}]: "${msg.text}"`);
+            
+            // Immediately append transcript chunk to UI state
+            setTranscripts((prevTranscripts) => {
+              const lastEntry = prevTranscripts[prevTranscripts.length - 1];
+              if (lastEntry && lastEntry.sender === msg.sender && lastEntry.isStreaming) {
+                // Update existing streaming entry
+                const updatedList = [...prevTranscripts];
+                updatedList[updatedList.length - 1] = {
+                  ...lastEntry,
+                  text: lastEntry.text + msg.text,
+                };
+                return updatedList;
+              } else {
+                // Add new streaming entry
+                return [
+                  ...prevTranscripts,
+                  {
+                    id: String(Date.now() + Math.random()),
+                    sender: msg.sender,
+                    text: msg.text,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    isStreaming: true,
+                  },
+                ];
+              }
+            });
+          } else if (msg.type === 'audio') {
+            audioChunkRecvCount++;
+            if (audioChunkRecvCount % 20 === 1) {
+              console.log(`[CLIENT-WS-RECV] Type "audio" chunk #${audioChunkRecvCount} (${msg.data?.length} base64 chars)`);
+            }
+            if (msg.data && playbackAudioCtxRef.current) {
+              playIncomingPCMChunk(msg.data, playbackAudioCtxRef.current);
+            }
+          } else if (msg.type === 'turn_complete') {
+            console.log('[CLIENT-WS-RECV] Type "turn_complete"');
+            // Finalize active streaming turn in UI state
+            setTranscripts((prevTranscripts) => {
+              if (prevTranscripts.length === 0) return prevTranscripts;
+              const updatedList = [...prevTranscripts];
+              const lastIdx = updatedList.length - 1;
+              if (updatedList[lastIdx].isStreaming) {
+                updatedList[lastIdx] = {
+                  ...updatedList[lastIdx],
+                  isStreaming: false,
+                };
+              }
+              return updatedList;
+            });
+          } else if (msg.type === 'error') {
+            console.error('[CLIENT-WS-RECV] Type "error":', msg.message);
+            setErrorMessage(msg.message || 'Error occurred in live session');
+          }
+        } catch (err) {
+          console.warn('[CLIENT-WS-RECV] Received non-JSON string message:', event.data);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('[CLIENT-WS] ❌ WebSocket error:', err);
+        setConnectionStatus('error');
+      };
+
+      ws.onclose = (e) => {
+        console.log('[CLIENT-WS] 🔌 WebSocket connection closed:', e.code, e.reason);
+        setConnectionStatus('disconnected');
+        setIsMicActive(false);
+      };
     } catch (err: any) {
-      console.error('Microphone access error:', err);
-      alert('Microphone permission is required to record your voice answer. Please allow mic access in browser settings.');
+      console.error('Failed to start live interview session:', err);
+      setConnectionStatus('error');
+      setErrorMessage(err.message || 'Microphone access or WebSocket connection failed.');
+      stopLiveSession();
     }
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-    }
-
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  const formatTimer = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
-  // Submit Spoken Answer to Express endpoint
-  const handleSubmitAnswer = async () => {
-    if (!recordedAudioBlob || !currentQuestion || !sessionId || !token) return;
-
-    setIsSubmitting(true);
+  // Play incoming 24kHz PCM audio chunk from Gemini Live API
+  const playIncomingPCMChunk = (base64Data: string, audioCtx: AudioContext) => {
     try {
-      const formData = new FormData();
-      formData.append('audio', recordedAudioBlob, `answer_${currentQuestion.id}.webm`);
-      formData.append('questionId', currentQuestion.id);
+      const pcmBytes = base64ToUint8Array(base64Data);
+      const int16Samples = new Int16Array(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength / 2);
 
-      const res = await fetch(`${API_BASE_URL}/api/interview/session/${sessionId}/answer`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
-        cleanupRecordedAudioUrl();
-
-        if (data.isComplete || !data.nextQuestion) {
-          setIsCompleted(true);
-        } else {
-          // Advance to next question
-          setCurrentQuestionIndex((prev) => prev + 1);
-        }
-      } else {
-        alert(`Error submitting answer: ${data.error || 'Unknown error'}`);
+      const float32Samples = new Float32Array(int16Samples.length);
+      for (let i = 0; i < int16Samples.length; i++) {
+        float32Samples[i] = int16Samples[i] / 32768.0;
       }
+
+      const sampleRate = 24000;
+      const audioBuffer = audioCtx.createBuffer(1, float32Samples.length, sampleRate);
+      audioBuffer.getChannelData(0).set(float32Samples);
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioCtx.destination);
+
+      const now = audioCtx.currentTime;
+      const startTime = Math.max(now, nextPlayTimeRef.current);
+      source.start(startTime);
+      nextPlayTimeRef.current = startTime + audioBuffer.duration;
     } catch (err) {
-      console.error('Failed to submit answer:', err);
-      alert('Failed to submit answer due to network error.');
-    } finally {
-      setIsSubmitting(false);
+      console.warn('Audio playback chunk error:', err);
     }
+  };
+
+  // Manual Safety Net: Trigger "I'm done answering"
+  const handleDoneAnswering = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('[CLIENT-WS-SEND] Sending done_answering signal to WebSocket server');
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'done_answering',
+          text: "I have finished answering the current question. Please proceed to acknowledge my answer and ask the next question.",
+        })
+      );
+    } else {
+      console.warn('[CLIENT-WS-SEND] Cannot send done_answering - WebSocket is not OPEN');
+    }
+  };
+
+  // Stop & Clean up Live Session
+  const stopLiveSession = () => {
+    setIsMicActive(false);
+
+    if (scriptProcessorRef.current) {
+      scriptProcessorRef.current.disconnect();
+      scriptProcessorRef.current = null;
+    }
+
+    if (micAudioCtxRef.current) {
+      micAudioCtxRef.current.close();
+      micAudioCtxRef.current = null;
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    if (playbackAudioCtxRef.current) {
+      playbackAudioCtxRef.current.close();
+      playbackAudioCtxRef.current = null;
+    }
+
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    setConnectionStatus('disconnected');
   };
 
   if (isLoading) {
     return (
       <div className="min-h-[80vh] flex flex-col items-center justify-center p-6 text-center text-slate-100">
         <Loader2 className="w-12 h-12 text-teal-400 animate-spin mb-4" />
-        <h2 className="text-xl font-medium">Preparing Voice Interview Session...</h2>
-        <p className="text-sm text-slate-400 mt-2">Loading role-tailored questions & audio assets</p>
+        <h2 className="text-xl font-medium">Preparing Live Interview Session...</h2>
+        <p className="text-sm text-slate-400 mt-2">Loading session questions & target role profile</p>
       </div>
     );
   }
 
-  if (errorMessage || !session) {
+  if (errorMessage && connectionStatus === 'disconnected') {
     return (
       <div className="max-w-xl mx-auto my-12 p-6 bg-slate-900/90 border border-slate-800 rounded-2xl text-center text-white">
         <AlertCircle className="w-12 h-12 text-rose-400 mx-auto mb-4" />
-        <h2 className="text-xl font-bold">Session Unavailable</h2>
-        <p className="text-slate-400 my-4">{errorMessage || 'Could not find specified interview session.'}</p>
+        <h2 className="text-xl font-bold">Live Session Error</h2>
+        <p className="text-slate-400 my-4">{errorMessage}</p>
         <Button onClick={() => navigate('/dashboard')} className="bg-slate-800 hover:bg-slate-700">
           <ArrowLeft className="w-4 h-4 mr-2" /> Return to Dashboard
         </Button>
@@ -302,223 +399,154 @@ export const InterviewSession: React.FC = () => {
     );
   }
 
-  // Session Completed Celebration Screen
-  if (isCompleted) {
-    return (
-      <div className="max-w-2xl mx-auto my-12 p-8 bg-slate-900/90 border border-slate-800/80 backdrop-blur-xl rounded-3xl text-white text-center shadow-2xl">
-        <div className="w-20 h-20 bg-teal-500/20 border border-teal-500/30 rounded-full flex items-center justify-center mx-auto mb-6">
-          <Sparkles className="w-10 h-10 text-teal-400 animate-pulse" />
-        </div>
-
-        <h1 className="text-3xl font-extrabold text-slate-100 mb-2">Mock Interview Session Completed!</h1>
-        <p className="text-slate-300 text-base max-w-md mx-auto mb-8">
-          Great job! You have answered all <span className="font-semibold text-teal-300">{session.questions.length} questions</span> for the{' '}
-          <span className="font-semibold text-cyan-300">{session.targetRole}</span> position.
-        </p>
-
-        <div className="grid grid-cols-2 gap-4 max-w-md mx-auto mb-8 text-left">
-          <div className="p-4 bg-slate-800/60 border border-slate-700/60 rounded-xl">
-            <span className="text-xs text-slate-400 uppercase tracking-wider block mb-1">Target Role</span>
-            <span className="text-sm font-semibold text-slate-200">{session.targetRole}</span>
-          </div>
-          <div className="p-4 bg-slate-800/60 border border-slate-700/60 rounded-xl">
-            <span className="text-xs text-slate-400 uppercase tracking-wider block mb-1">Questions Answered</span>
-            <span className="text-sm font-semibold text-teal-300">{session.questions.length} / {session.questions.length}</span>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <Button
-            onClick={() => navigate('/dashboard')}
-            className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-bold px-8 py-3 rounded-xl shadow-lg shadow-teal-500/20"
-          >
-            Go to Dashboard <ArrowRight className="w-4 h-4 ml-2" />
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  const progressPercentage = Math.round(((currentQuestionIndex + 1) / session.questions.length) * 100);
-
   return (
-    <div className="max-w-3xl mx-auto my-8 px-4 sm:px-6">
-      {/* Top Header Bar */}
+    <div className="max-w-4xl mx-auto my-8 px-4 sm:px-6">
+      {/* Top Bar Navigation */}
       <div className="flex items-center justify-between mb-6">
         <Button
           variant="outline"
-          onClick={() => navigate('/dashboard')}
+          onClick={() => {
+            stopLiveSession();
+            navigate('/dashboard');
+          }}
           className="border-slate-800 bg-slate-900/60 hover:bg-slate-800 text-slate-300 text-xs px-3 py-1.5"
         >
           <ArrowLeft className="w-3.5 h-3.5 mr-1.5" /> Back to Dashboard
         </Button>
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          <span className="px-2.5 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-slate-300 font-medium">
-            Role: {session.targetRole}
+
+        {/* Live WebSocket Connection Status Badge */}
+        <div className="flex items-center gap-3 text-xs">
+          <span className="px-3 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-slate-300 font-medium">
+            Role: {session?.targetRole}
+          </span>
+
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold ${
+              connectionStatus === 'connected'
+                ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                : connectionStatus === 'connecting'
+                ? 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                : 'bg-slate-800 border-slate-700 text-slate-400'
+            }`}
+          >
+            {connectionStatus === 'connected' ? (
+              <>
+                <Wifi className="w-3.5 h-3.5 text-emerald-400 animate-pulse" /> Live Streaming Connected
+              </>
+            ) : connectionStatus === 'connecting' ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" /> Connecting to Gemini Live...
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-3.5 h-3.5 text-slate-400" /> Disconnected
+              </>
+            )}
           </span>
         </div>
       </div>
 
-      {/* Glass Panel Main Card */}
-      <Card className="bg-slate-900/85 border border-slate-800/90 backdrop-blur-xl rounded-3xl text-white shadow-2xl overflow-hidden">
-        {/* Progress Bar Header */}
-        <div className="w-full bg-slate-800/40 h-1.5 relative">
-          <div
-            className="bg-gradient-to-r from-teal-400 to-cyan-400 h-1.5 transition-all duration-500 ease-out"
-            style={{ width: `${progressPercentage}%` }}
-          />
-        </div>
-
+      {/* Main Live Session Panel */}
+      <Card className="bg-slate-900/90 border border-slate-800 backdrop-blur-xl rounded-3xl text-white shadow-2xl overflow-hidden">
         <CardContent className="p-6 sm:p-8">
-          {/* Category Pill & Counter */}
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-xs font-semibold tracking-wide uppercase">
-              <Sparkles className="w-3 h-3 text-cyan-400" />
-              {currentQuestion?.category || 'General'}
-            </span>
+          {/* Section Header */}
+          <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-6">
+            <div>
+              <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-teal-400" /> Real-Time Voice Interview Session
+              </h1>
+              <p className="text-xs text-slate-400 mt-1">
+                Powered by Gemini Live API (<span className="text-teal-300">gemini-3.1-flash-live-preview</span>)
+              </p>
+            </div>
 
-            <span className="text-xs font-semibold text-slate-400 tracking-wider">
-              Question <span className="text-teal-300 font-bold">{currentQuestionIndex + 1}</span> of {session.questions.length}
-            </span>
+            {/* Start / Stop Controls */}
+            {connectionStatus === 'disconnected' ? (
+              <Button
+                onClick={startLiveInterview}
+                className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-bold px-6 py-2.5 rounded-xl shadow-lg shadow-teal-500/20"
+              >
+                <Mic className="w-4 h-4 mr-2" /> Start Live Interview
+              </Button>
+            ) : (
+              <Button
+                onClick={stopLiveSession}
+                variant="destructive"
+                className="bg-rose-500 hover:bg-rose-600 font-semibold px-5 py-2 rounded-xl"
+              >
+                <Square className="w-4 h-4 mr-2 fill-current" /> End Session
+              </Button>
+            )}
           </div>
 
-          {/* Question Text Box */}
-          <div className="relative p-6 sm:p-8 bg-slate-950/60 border border-slate-800/80 rounded-2xl mb-8">
-            <h2 className="text-xl sm:text-2xl font-medium text-slate-100 leading-relaxed mb-4">
-              "{currentQuestion?.questionText}"
-            </h2>
 
-            {/* Audio Control Bar */}
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800/60 text-xs">
-              <div className="flex items-center gap-2">
-                {isLoadingAudio ? (
-                  <span className="inline-flex items-center gap-2 text-slate-400">
-                    <Loader2 className="w-4 h-4 animate-spin text-teal-400" /> Loading question audio...
-                  </span>
-                ) : isPlayingAudio ? (
-                  <span className="inline-flex items-center gap-2 text-teal-300">
-                    <Volume2 className="w-4 h-4 text-teal-400 animate-pulse" /> Playing question audio...
-                  </span>
-                ) : (
-                  <span className="text-slate-400">Listen to interviewer prompt:</span>
-                )}
-              </div>
 
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => currentQuestion && fetchAndPlayQuestionTTS(currentQuestion.id)}
-                disabled={isLoadingAudio}
-                className="border-slate-700 bg-slate-900/80 hover:bg-slate-800 text-slate-200 text-xs h-8 px-3"
-              >
-                <RotateCcw className="w-3 h-3 mr-1.5" /> Replay Audio
-              </Button>
+          {/* Live Transcript & Conversation Window */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Volume2 className="w-4 h-4 text-teal-400" /> Live Transcript Log
+              </h3>
+              {isMicActive && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  Mic Active (Streaming 16kHz PCM)
+                </span>
+              )}
+            </div>
+
+            <div
+              ref={transcriptScrollRef}
+              className="h-80 overflow-y-auto p-4 bg-slate-950/80 border border-slate-800/90 rounded-2xl space-y-4 font-mono text-sm leading-relaxed"
+            >
+              {transcripts.length === 0 && (
+                <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 py-12">
+                  <Mic className="w-10 h-10 mb-2 opacity-40 text-slate-400" />
+                  <p className="text-sm">Click "Start Live Interview" above to connect microphone and start streaming.</p>
+                </div>
+              )}
+
+              {/* Turn Log Entries */}
+              {transcripts.map((t) => (
+                <div
+                  key={t.id}
+                  className={`p-3.5 rounded-xl border transition-all ${
+                    t.sender === 'assistant'
+                      ? 'bg-teal-950/30 border-teal-800/40 text-teal-100'
+                      : 'bg-cyan-950/30 border-cyan-800/40 text-cyan-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-sans text-slate-400 mb-1">
+                    <span className={`font-bold ${t.sender === 'assistant' ? 'text-teal-400' : 'text-cyan-400'}`}>
+                      {t.sender === 'assistant' ? '🤖 AI Interviewer' : '👤 You (Candidate)'}
+                      {t.isStreaming && <span className="ml-2 text-xs font-normal animate-pulse text-amber-400">(streaming...)</span>}
+                    </span>
+                    <span>{t.timestamp}</span>
+                  </div>
+                  <p className="text-sm font-sans whitespace-pre-wrap">{t.text}</p>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Voice Answer Recording Section */}
-          <div className="p-6 bg-slate-950/40 border border-slate-800/60 rounded-2xl flex flex-col items-center justify-center text-center">
-            {/* 1. NOT RECORDING & NO AUDIO YET */}
-            {!isRecording && !recordedAudioUrl && (
-              <div className="py-6 flex flex-col items-center">
-                <button
-                  onClick={startRecording}
-                  className="group relative w-20 h-20 bg-gradient-to-br from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 rounded-full flex items-center justify-center shadow-xl shadow-teal-500/25 transition-all transform hover:scale-105 mb-4"
-                >
-                  <Mic className="w-9 h-9 text-slate-950 group-hover:scale-110 transition-transform" />
-                  <span className="absolute -bottom-1 -right-1 flex h-4 w-4">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-4 w-4 bg-teal-500"></span>
-                  </span>
-                </button>
-
-                <h3 className="text-lg font-semibold text-slate-200 mb-1">Record Your Spoken Answer</h3>
-                <p className="text-xs text-slate-400 max-w-sm">
-                  Click the microphone when ready to answer out loud using your voice.
-                </p>
+          {/* Action & Manual Safety Net Bar */}
+          {connectionStatus === 'connected' && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-slate-950/40 border border-slate-800/60 rounded-2xl">
+              <div className="text-xs text-slate-400">
+                <span className="font-semibold text-slate-300">Safety Net:</span> If automatic turn detection delays after your spoken answer, click to signal completion.
               </div>
-            )}
 
-            {/* 2. RECORDING IN PROGRESS */}
-            {isRecording && (
-              <div className="py-6 flex flex-col items-center">
-                {/* Live Timer Counter */}
-                <div className="flex items-center gap-2 mb-4">
-                  <span className="relative flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
-                  </span>
-                  <span className="text-2xl font-mono font-bold text-rose-400 tracking-wider">
-                    {formatTimer(recordingTime)}
-                  </span>
-                </div>
-
-                {/* Animated Audio Wave Visualizer */}
-                <div className="flex items-center gap-1.5 h-12 my-3">
-                  {[40, 70, 30, 90, 50, 80, 40, 100, 60, 30, 80, 50].map((h, i) => (
-                    <div
-                      key={i}
-                      className="w-1.5 bg-gradient-to-t from-teal-500 to-cyan-400 rounded-full animate-pulse"
-                      style={{
-                        height: `${h}%`,
-                        animationDelay: `${(i % 4) * 0.15}s`,
-                      }}
-                    />
-                  ))}
-                </div>
-
-                <p className="text-xs text-slate-300 mb-6">Recording spoken answer... Speak clearly into your mic.</p>
-
-                <Button
-                  onClick={stopRecording}
-                  className="bg-rose-500 hover:bg-rose-600 text-white font-semibold px-6 py-2.5 rounded-xl shadow-lg shadow-rose-500/20"
-                >
-                  <Square className="w-4 h-4 mr-2 fill-current" /> Stop Recording
-                </Button>
-              </div>
-            )}
-
-            {/* 3. RECORDED AUDIO PREVIEW & SUBMIT */}
-            {!isRecording && recordedAudioUrl && (
-              <div className="w-full py-4 flex flex-col items-center">
-                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold mb-4">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Answer Recorded ({formatTimer(recordingTime)})
-                </div>
-
-                {/* Audio Player Preview */}
-                <div className="w-full max-w-md bg-slate-900 border border-slate-800 p-3 rounded-xl mb-6">
-                  <audio src={recordedAudioUrl} controls className="w-full h-9 accent-teal-400" />
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-3 w-full max-w-md justify-center">
-                  <Button
-                    variant="outline"
-                    onClick={startRecording}
-                    disabled={isSubmitting}
-                    className="border-slate-700 bg-slate-900/80 hover:bg-slate-800 text-slate-300"
-                  >
-                    <RotateCcw className="w-4 h-4 mr-2" /> Re-record Answer
-                  </Button>
-
-                  <Button
-                    onClick={handleSubmitAnswer}
-                    disabled={isSubmitting}
-                    className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-bold px-6"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Submitting...
-                      </>
-                    ) : (
-                      <>
-                        Submit & Next Question <Send className="w-4 h-4 ml-2" />
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
+              <Button
+                onClick={handleDoneAnswering}
+                className="bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-slate-950 font-bold text-xs px-5 py-2 rounded-xl shadow-md"
+              >
+                <Send className="w-3.5 h-3.5 mr-2" /> I'm Done Answering
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

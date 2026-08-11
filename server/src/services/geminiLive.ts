@@ -21,6 +21,7 @@ export interface GeminiLiveOptions {
 export interface GeminiLiveSessionWrapper {
   sendAudioChunk: (base64Data: string, mimeType?: string) => void;
   sendTextPrompt: (text: string) => void;
+  sendDoneAnsweringSignal: () => void;
   close: () => void;
 }
 
@@ -57,7 +58,6 @@ STRICT INTERVIEW PROTOCOL:
 6. Conclude by thanking the candidate after the final answer.
 `;
 
-  // Priority list of models supporting Gemini Live Bidi API
   const liveModelsToTry = [
     'gemini-3.1-flash-live-preview',
     'gemini-2.5-flash-native-audio-latest',
@@ -69,7 +69,7 @@ STRICT INTERVIEW PROTOCOL:
 
   for (const modelName of liveModelsToTry) {
     try {
-      console.log(`🎙️ Connecting to Gemini Live API using model "${modelName}" for Session [${options.sessionId}]...`);
+      console.log(`[GEMINI-LIVE-SVC] Connecting to Gemini Live API using model "${modelName}" for Session [${options.sessionId}]...`);
       session = await ai.live.connect({
         model: modelName,
         config: {
@@ -82,18 +82,23 @@ STRICT INTERVIEW PROTOCOL:
         },
         callbacks: {
           onopen: () => {
-            console.log(`⚡ Gemini Live API WebSocket connected successfully (${modelName}).`);
+            console.log(`[GEMINI-LIVE-SVC] ⚡ Gemini Live API WebSocket connected successfully (${modelName}).`);
           },
           onmessage: (msg: any) => {
             try {
+              console.log(`[GEMINI-LIVE-RECV] Raw message keys:`, Object.keys(msg));
               if (msg.serverContent) {
                 const sc = msg.serverContent;
+                console.log(`[GEMINI-LIVE-RECV] serverContent flags: turnComplete=${sc.turnComplete}, interrupted=${sc.interrupted}, waitingForInput=${sc.waitingForInput}, modelTurnParts=${sc.modelTurn?.parts?.length || 0}`);
+                
                 if (sc.modelTurn) {
                   for (const part of sc.modelTurn.parts || []) {
                     if (part.text) {
+                      console.log(`[GEMINI-LIVE-RECV] modelTurn.part.text: "${part.text}"`);
                       options.onTranscriptChunk({ text: part.text, sender: 'assistant' });
                     }
                     if (part.inlineData && part.inlineData.data) {
+                      console.log(`[GEMINI-LIVE-RECV] modelTurn.part.inlineData audio chunk (${part.inlineData.data.length} base64 chars, ${part.inlineData.mimeType})`);
                       options.onAudioChunk({
                         data: part.inlineData.data,
                         mimeType: part.inlineData.mimeType || 'audio/pcm;rate=24000',
@@ -102,41 +107,44 @@ STRICT INTERVIEW PROTOCOL:
                   }
                 }
                 if (sc.outputTranscription?.text) {
+                  console.log(`[GEMINI-LIVE-RECV] outputTranscription text: "${sc.outputTranscription.text}"`);
                   options.onTranscriptChunk({
                     text: sc.outputTranscription.text,
                     sender: 'assistant',
                   });
                 }
                 if (sc.inputTranscription?.text) {
+                  console.log(`[GEMINI-LIVE-RECV] inputTranscription text: "${sc.inputTranscription.text}"`);
                   options.onTranscriptChunk({
                     text: sc.inputTranscription.text,
                     sender: 'user',
                   });
                 }
                 if (sc.turnComplete && options.onTurnComplete) {
+                  console.log(`[GEMINI-LIVE-RECV] turnComplete flag received from Gemini`);
                   options.onTurnComplete();
                 }
               }
             } catch (msgErr) {
-              console.warn('⚠️ Error parsing Gemini Live server message:', msgErr);
+              console.warn('[GEMINI-LIVE-SVC] Error parsing Gemini Live server message:', msgErr);
             }
           },
           onerror: (err: any) => {
-            console.error('❌ Gemini Live API connection error:', err?.message || err);
+            console.error('[GEMINI-LIVE-SVC] ❌ Gemini Live API connection error:', err?.message || err);
             if (options.onError) options.onError(err);
           },
           onclose: (e: any) => {
-            console.log(`🔌 Gemini Live API connection closed for Session [${options.sessionId}]`);
+            console.log(`[GEMINI-LIVE-SVC] 🔌 Gemini Live API connection closed for Session [${options.sessionId}]`);
             if (options.onClose) options.onClose();
           },
         },
       });
 
       activeModel = modelName;
-      console.log(`✅ Established Gemini Live session with model "${activeModel}"`);
+      console.log(`[GEMINI-LIVE-SVC] ✅ Established Gemini Live session with model "${activeModel}"`);
       break;
     } catch (err: any) {
-      console.warn(`⚠️ Failed to connect Gemini Live with model "${modelName}":`, err?.message || err);
+      console.warn(`[GEMINI-LIVE-SVC] ⚠️ Failed to connect Gemini Live with model "${modelName}":`, err?.message || err);
     }
   }
 
@@ -147,6 +155,7 @@ STRICT INTERVIEW PROTOCOL:
   return {
     sendAudioChunk: (base64Data: string, mimeType: string = 'audio/pcm;rate=16000') => {
       try {
+        // Log audio chunk sending periodically (e.g. sample)
         session.sendRealtimeInput({
           mediaChunks: [
             {
@@ -156,11 +165,12 @@ STRICT INTERVIEW PROTOCOL:
           ],
         });
       } catch (err: any) {
-        console.error('❌ Error sending audio chunk to Gemini Live API:', err?.message || err);
+        console.error('[GEMINI-LIVE-SVC] ❌ Error sending audio chunk to Gemini Live API:', err?.message || err);
       }
     },
     sendTextPrompt: (text: string) => {
       try {
+        console.log(`[GEMINI-LIVE-SEND] Sending text prompt to Gemini Live: "${text}"`);
         session.sendClientContent({
           turns: [
             {
@@ -171,7 +181,27 @@ STRICT INTERVIEW PROTOCOL:
           turnComplete: true,
         });
       } catch (err: any) {
-        console.error('❌ Error sending text prompt to Gemini Live API:', err?.message || err);
+        console.error('[GEMINI-LIVE-SVC] ❌ Error sending text prompt to Gemini Live API:', err?.message || err);
+      }
+    },
+    sendDoneAnsweringSignal: () => {
+      try {
+        console.log(`[GEMINI-LIVE-SEND] Sending Done Answering turn completion signal to Gemini Live`);
+        // Send client turn complete and audioStreamEnd signal to indicate end of user speech
+        session.sendRealtimeInput({
+          audioStreamEnd: true,
+        });
+        session.sendClientContent({
+          turns: [
+            {
+              role: 'user',
+              parts: [{ text: "I have finished my answer to the question. Please provide your brief feedback and move to the next question." }],
+            },
+          ],
+          turnComplete: true,
+        });
+      } catch (err: any) {
+        console.error('[GEMINI-LIVE-SVC] ❌ Error sending done answering signal:', err?.message || err);
       }
     },
     close: () => {

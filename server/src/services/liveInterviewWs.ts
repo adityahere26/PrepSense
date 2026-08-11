@@ -1,5 +1,5 @@
 import { Server as HttpServer } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { parse as parseUrl } from 'url';
 import { prisma } from '../db.js';
 import { createGeminiLiveSession, GeminiLiveSessionWrapper } from './geminiLive.js';
@@ -21,7 +21,7 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
     const parsedUrl = parseUrl(request.url || '', true);
     const sessionId = (parsedUrl.query.sessionId as string) || (parsedUrl.query.id as string);
 
-    console.log(`🔌 Incoming WebSocket connection for Live Interview (Session ID: "${sessionId || 'missing'}")`);
+    console.log(`[WS-SERVER] 🔌 Incoming WebSocket connection for Live Interview (Session ID: "${sessionId || 'missing'}")`);
 
     if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
       ws.send(JSON.stringify({ type: 'error', message: 'Missing required sessionId query parameter' }));
@@ -30,6 +30,7 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
     }
 
     let geminiLiveSession: GeminiLiveSessionWrapper | null = null;
+    let audioChunkCounter = 0;
 
     try {
       // 1. Fetch InterviewSession and pre-generated InterviewQuestions from Postgres via Prisma
@@ -43,13 +44,13 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
       });
 
       if (!sessionRecord) {
-        console.warn(`⚠️ WebSocket connection rejected: InterviewSession [${sessionId}] not found`);
+        console.warn(`[WS-SERVER] ⚠️ WebSocket connection rejected: InterviewSession [${sessionId}] not found`);
         ws.send(JSON.stringify({ type: 'error', message: `Interview session "${sessionId}" not found` }));
         ws.close(1008, 'Session not found');
         return;
       }
 
-      console.log(`🎙️ Initializing Gemini Live bridge for Session [${sessionRecord.id}] (${sessionRecord.questions.length} questions, Target Role: "${sessionRecord.targetRole}")`);
+      console.log(`[WS-SERVER] 🎙️ Initializing Gemini Live bridge for Session [${sessionRecord.id}] (${sessionRecord.questions.length} questions, Target Role: "${sessionRecord.targetRole}")`);
 
       // 2. Open Gemini Live API connection
       geminiLiveSession = await createGeminiLiveSession({
@@ -62,33 +63,42 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
           questionText: q.questionText,
         })),
         onAudioChunk: (chunk) => {
-          if (ws.readyState === WebSocket.OPEN) {
+          if (ws.readyState === 1) {
+            audioChunkCounter++;
+            if (audioChunkCounter % 20 === 1) {
+              console.log(`[WS-SERVER->CLIENT] Relay AUDIO chunk #${audioChunkCounter} (${chunk.data.length} base64 chars)`);
+            }
             ws.send(JSON.stringify({ type: 'audio', data: chunk.data, mimeType: chunk.mimeType }));
           }
         },
         onTranscriptChunk: (transcript) => {
-          if (ws.readyState === WebSocket.OPEN) {
+          if (ws.readyState === 1) {
+            console.log(`[WS-SERVER->CLIENT] Relay TRANSCRIPT chunk [sender=${transcript.sender}]: "${transcript.text}"`);
             ws.send(JSON.stringify({ type: 'transcript', text: transcript.text, sender: transcript.sender }));
           }
         },
         onTurnComplete: () => {
-          if (ws.readyState === WebSocket.OPEN) {
+          if (ws.readyState === 1) {
+            console.log(`[WS-SERVER->CLIENT] Relay TURN_COMPLETE`);
             ws.send(JSON.stringify({ type: 'turn_complete' }));
           }
         },
         onError: (err) => {
-          if (ws.readyState === WebSocket.OPEN) {
+          if (ws.readyState === 1) {
+            console.error(`[WS-SERVER->CLIENT] Relay ERROR:`, err?.message || err);
             ws.send(JSON.stringify({ type: 'error', message: err?.message || 'Gemini Live session error' }));
           }
         },
         onClose: () => {
-          if (ws.readyState === WebSocket.OPEN) {
+          if (ws.readyState === 1) {
+            console.log(`[WS-SERVER->CLIENT] Relay SESSION_CLOSED`);
             ws.send(JSON.stringify({ type: 'session_closed' }));
           }
         },
       });
 
       // 3. Confirm connection to client
+      console.log(`[WS-SERVER->CLIENT] Sending CONNECTED handshake to client`);
       ws.send(
         JSON.stringify({
           type: 'connected',
@@ -99,42 +109,43 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
       );
 
       // 4. Trigger initial Gemini interviewer greeting & Question 1
+      console.log(`[WS-SERVER->GEMINI] Sending initial trigger for Question 1`);
       geminiLiveSession.sendTextPrompt(
         `Hello! The candidate has joined the live session. Please greet the candidate and ask Question 1 now.`
       );
 
       // 5. Handle messages sent from client WebSocket
-      ws.on('message', (message: WebSocket.RawData, isBinary: boolean) => {
+      ws.on('message', (message: RawData, isBinary: boolean) => {
         if (!geminiLiveSession) return;
 
         if (isBinary) {
-          // Binary PCM audio buffer sent from client mic
           const buffer = Buffer.from(message as ArrayBuffer);
           const base64Data = buffer.toString('base64');
           geminiLiveSession.sendAudioChunk(base64Data, 'audio/pcm;rate=16000');
         } else {
-          // Text/JSON payload sent from client
           try {
             const textStr = message.toString();
             const parsed = JSON.parse(textStr);
+            console.log(`[CLIENT->WS-SERVER] Received JSON message of type "${parsed.type}"`, parsed.type === 'text_prompt' ? `text="${parsed.text}"` : '');
 
             if (parsed.type === 'audio' && parsed.data) {
               const mimeType = parsed.mimeType || 'audio/pcm;rate=16000';
               geminiLiveSession.sendAudioChunk(parsed.data, mimeType);
-            } else if (parsed.type === 'text_prompt' && parsed.text) {
-              geminiLiveSession.sendTextPrompt(parsed.text);
+            } else if (parsed.type === 'text_prompt' || parsed.type === 'done_answering') {
+              console.log(`[WS-SERVER->GEMINI] Triggering Done Answering signal for Gemini Live`);
+              geminiLiveSession.sendDoneAnsweringSignal();
             } else if (parsed.type === 'start') {
               geminiLiveSession.sendTextPrompt('The candidate is ready. Please begin with Question 1.');
             }
           } catch (jsonErr) {
-            console.warn('⚠️ Received non-JSON string message over WebSocket:', message.toString());
+            console.warn('[WS-SERVER] Received non-JSON string message over WebSocket:', message.toString());
           }
         }
       });
 
       // 6. Handle client WebSocket disconnect
       ws.on('close', (code, reason) => {
-        console.log(`🔌 Client WebSocket disconnected for Session [${sessionId}] (${code})`);
+        console.log(`[WS-SERVER] 🔌 Client WebSocket disconnected for Session [${sessionId}] (${code})`);
         if (geminiLiveSession) {
           geminiLiveSession.close();
           geminiLiveSession = null;
@@ -142,15 +153,15 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
       });
 
       ws.on('error', (wsErr) => {
-        console.error(`❌ Client WebSocket error for Session [${sessionId}]:`, wsErr);
+        console.error(`[WS-SERVER] ❌ Client WebSocket error for Session [${sessionId}]:`, wsErr);
         if (geminiLiveSession) {
           geminiLiveSession.close();
           geminiLiveSession = null;
         }
       });
     } catch (error: any) {
-      console.error(`❌ Failed to establish live interview WebSocket session [${sessionId}]:`, error);
-      if (ws.readyState === WebSocket.OPEN) {
+      console.error(`[WS-SERVER] ❌ Failed to establish live interview WebSocket session [${sessionId}]:`, error);
+      if (ws.readyState === 1) {
         ws.send(JSON.stringify({ type: 'error', message: error.message || 'Failed to initialize live session' }));
         ws.close(1011, 'Internal server error');
       }
