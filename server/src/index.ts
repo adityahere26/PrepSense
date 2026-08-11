@@ -1,3 +1,4 @@
+import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -8,6 +9,7 @@ import resourceRoutes from './routes/resources.js';
 
 import resumeRoutes from './routes/resume.js';
 import interviewRoutes from './routes/interview.js';
+import { setupLiveInterviewWebSocket } from './services/liveInterviewWs.js';
 
 dotenv.config();
 
@@ -48,8 +50,14 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// Create HTTP Server & Attach Live Interview WebSocket
+const server = http.createServer(app);
+setupLiveInterviewWebSocket(server);
+
 // Start Server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 PrepSense Server listening on http://localhost:${PORT}`);
+  console.log(`🎙️ Live Streaming Interview WebSocket ready on ws://localhost:${PORT}/api/interview/live`);
   console.log(`🔒 Allowed CORS Origin: ${CLIENT_URL}`);
 });
+
