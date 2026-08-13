@@ -6,6 +6,10 @@ import {
   generateInterviewQuestionsWithGemini,
   generateQuestionTTSWithGemini,
   transcribeAudioChunkWithGemini,
+  evaluateInterviewAnswerWithGemini,
+  generateSessionSummaryWithGemini,
+  AnswerEvaluationResult,
+  SessionSummaryResult,
 } from '../services/gemini.js';
 
 const router = Router();
@@ -384,6 +388,132 @@ router.post('/transcribe-chunk', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('❌ Error in transcribe-chunk endpoint:', error);
     return res.status(500).json({ error: error.message || 'Failed to transcribe audio chunk' });
+  }
+});
+
+/**
+ * POST /api/interview/evaluate-answer
+ * Evaluates candidate answer for a specific question, saves InterviewAnswer in DB,
+ * and if session is complete, synthesizes session summary and marks session as completed.
+ */
+router.post('/evaluate-answer', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { questionId, transcript } = req.body || {};
+
+    if (!questionId || typeof questionId !== 'string') {
+      return res.status(400).json({ error: 'Missing required questionId field' });
+    }
+
+    if (typeof transcript !== 'string' || !transcript.trim()) {
+      return res.status(400).json({ error: 'Missing required transcript text' });
+    }
+
+    // 1. Fetch question and its session
+    const question = await prisma.interviewQuestion.findUnique({
+      where: { id: questionId },
+      include: {
+        session: {
+          include: {
+            questions: {
+              orderBy: { order: 'asc' },
+              include: { answer: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!question) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+
+    if (question.session.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied to question session' });
+    }
+
+    console.log(`📊 Evaluating candidate answer for Question [${questionId}] ("${question.questionText.slice(0, 30)}...")...`);
+
+    // 2. Call Gemini service to evaluate answer
+    const evaluation = await evaluateInterviewAnswerWithGemini(
+      question.questionText,
+      transcript.trim(),
+      question.session.targetRole
+    );
+
+    // 3. Save/upsert InterviewAnswer record in Prisma
+    const answer = await prisma.interviewAnswer.upsert({
+      where: { questionId },
+      update: {
+        transcript: transcript.trim(),
+        evaluationJson: JSON.stringify(evaluation),
+        scoreOverall: evaluation.scoreOverall,
+      },
+      create: {
+        questionId,
+        transcript: transcript.trim(),
+        evaluationJson: JSON.stringify(evaluation),
+        scoreOverall: evaluation.scoreOverall,
+      },
+    });
+
+    console.log(`✅ Saved InterviewAnswer [${answer.id}] with overall score ${evaluation.scoreOverall}/100.`);
+
+    // 4. Check if all questions in session are answered
+    const allQuestions = question.session.questions;
+    const answeredList = allQuestions
+      .map((q) => {
+        if (q.id === questionId) {
+          return { questionText: q.questionText, transcript: transcript.trim(), evaluation };
+        }
+        if (q.answer && q.answer.transcript && q.answer.transcript !== '[Audio recorded - evaluation pending in next step]') {
+          let evalDataObj: any = {};
+          try {
+            evalDataObj = typeof q.answer.evaluationJson === 'string' ? JSON.parse(q.answer.evaluationJson) : q.answer.evaluationJson;
+          } catch (e) {}
+          return {
+            questionText: q.questionText,
+            transcript: q.answer.transcript,
+            evaluation: evalDataObj,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean) as Array<{ questionText: string; transcript: string; evaluation: AnswerEvaluationResult }>;
+
+    const isSessionCompleted = answeredList.length >= allQuestions.length;
+    let sessionSummary: SessionSummaryResult | null = null;
+
+    if (isSessionCompleted) {
+      console.log(`🎉 All ${allQuestions.length} questions answered! Generating session summary...`);
+      sessionSummary = await generateSessionSummaryWithGemini(question.session.targetRole, answeredList);
+
+      await prisma.interviewSession.update({
+        where: { id: question.session.id },
+        data: {
+          status: 'completed',
+          completedAt: new Date(),
+          summaryJson: JSON.stringify(sessionSummary),
+        },
+      });
+
+      console.log(`🏆 Session [${question.session.id}] marked as completed with overall score ${sessionSummary.overallScore}.`);
+    }
+
+    return res.json({
+      success: true,
+      answer,
+      evaluation,
+      isSessionCompleted,
+      sessionSummary,
+    });
+  } catch (error: any) {
+    console.error('❌ Error evaluating answer endpoint:', error);
+    return res.status(500).json({ error: error.message || 'Failed to evaluate answer' });
   }
 });
 

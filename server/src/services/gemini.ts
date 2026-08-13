@@ -819,5 +819,274 @@ export async function transcribeAudioChunkWithGemini(
   return '';
 }
 
+export interface AnswerEvaluationResult {
+  starScore: number;
+  specificityScore: number;
+  relevanceScore: number;
+  scoreOverall: number;
+  feedback: string;
+  source?: 'ai' | 'heuristic_fallback';
+  modelUsed?: string;
+}
+
+export interface SessionSummaryResult {
+  overallScore: number;
+  averageStarScore: number;
+  averageSpecificityScore: number;
+  averageRelevanceScore: number;
+  topImprovementAreas: string[];
+  summaryText: string;
+  source?: 'ai' | 'heuristic_fallback';
+  modelUsed?: string;
+}
+
+const answerEvaluationJsonSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    starScore: { type: Type.INTEGER },
+    specificityScore: { type: Type.INTEGER },
+    relevanceScore: { type: Type.INTEGER },
+    scoreOverall: { type: Type.INTEGER },
+    feedback: { type: Type.STRING },
+  },
+  required: ['starScore', 'specificityScore', 'relevanceScore', 'scoreOverall', 'feedback'],
+};
+
+const sessionSummaryJsonSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    overallScore: { type: Type.INTEGER },
+    averageStarScore: { type: Type.INTEGER },
+    averageSpecificityScore: { type: Type.INTEGER },
+    averageRelevanceScore: { type: Type.INTEGER },
+    topImprovementAreas: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    summaryText: { type: Type.STRING },
+  },
+  required: ['overallScore', 'averageStarScore', 'averageSpecificityScore', 'averageRelevanceScore', 'topImprovementAreas', 'summaryText'],
+};
+
+export async function evaluateInterviewAnswerWithGemini(
+  questionText: string,
+  transcript: string,
+  targetRole: string = 'Candidate'
+): Promise<AnswerEvaluationResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn('⚠️ GEMINI_API_KEY is missing. Using heuristic fallback evaluation.');
+    return fallbackHeuristicAnswerEvaluation(questionText, transcript);
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `You are an expert interviewer evaluating a candidate's response for the position of "${targetRole}".
+
+INTERVIEW QUESTION:
+"${questionText}"
+
+CANDIDATE'S SPOKEN TRANSCRIPT:
+"${transcript}"
+
+Evaluate the answer on a 0 to 100 scale across 3 criteria:
+1. STAR structure score (0-100): How well does the answer follow the Situation, Task, Action, Result framework?
+2. Specificity score (0-100): Does the answer include concrete metrics, technical details, tools, and specific actions?
+3. Relevance score (0-100): How directly and effectively does the response address the core question?
+
+Also calculate scoreOverall (0-100) as the average of the 3 scores.
+Provide concise written feedback (1-2 sentences) highlighting what was strong or what to improve.
+
+Return ONLY a JSON object adhering to the schema.`;
+
+  const modelsToTry = await getAvailableGeminiModels(ai);
+
+  for (const modelName of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: answerEvaluationJsonSchema,
+          temperature: 0.3,
+        },
+      });
+
+      const responseText = response.text;
+      if (responseText) {
+        const parsed = JSON.parse(responseText);
+        if (
+          typeof parsed.starScore === 'number' &&
+          typeof parsed.specificityScore === 'number' &&
+          typeof parsed.relevanceScore === 'number' &&
+          typeof parsed.feedback === 'string'
+        ) {
+          const starScore = Math.min(100, Math.max(0, Math.round(parsed.starScore)));
+          const specificityScore = Math.min(100, Math.max(0, Math.round(parsed.specificityScore)));
+          const relevanceScore = Math.min(100, Math.max(0, Math.round(parsed.relevanceScore)));
+          const scoreOverall = Math.min(100, Math.max(0, Math.round(parsed.scoreOverall || (starScore + specificityScore + relevanceScore) / 3)));
+
+          console.log(`✨ Evaluated interview answer using model ${modelName}: Overall Score = ${scoreOverall}`);
+          return {
+            starScore,
+            specificityScore,
+            relevanceScore,
+            scoreOverall,
+            feedback: parsed.feedback.trim(),
+            source: 'ai',
+            modelUsed: modelName,
+          };
+        }
+      }
+    } catch (err: any) {
+      console.warn(`Gemini model ${modelName} answer evaluation failed:`, err?.message || err);
+    }
+  }
+
+  console.warn('⚠️ All Gemini API models failed for answer evaluation. Using heuristic fallback.');
+  return fallbackHeuristicAnswerEvaluation(questionText, transcript);
+}
+
+function fallbackHeuristicAnswerEvaluation(questionText: string, transcript: string): AnswerEvaluationResult {
+  const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
+  
+  let starScore = 65;
+  let specificityScore = 60;
+  let relevanceScore = 70;
+
+  if (wordCount > 40) starScore += 15;
+  if (wordCount > 80) starScore += 10;
+  if (/\b(because|result|achieved|improved|led to|built|using|percent|%|\d+)\b/i.test(transcript)) specificityScore += 25;
+  if (transcript.length > 20) relevanceScore += 15;
+
+  starScore = Math.min(95, starScore);
+  specificityScore = Math.min(95, specificityScore);
+  relevanceScore = Math.min(95, relevanceScore);
+
+  const scoreOverall = Math.round((starScore + specificityScore + relevanceScore) / 3);
+
+  let feedback = 'Good initial response. To improve, structure your answer clearly using Situation, Task, Action, and measurable Results.';
+  if (wordCount < 15) {
+    feedback = 'Your response was quite brief. Try providing a specific example with concrete details and metrics to demonstrate your experience.';
+  } else if (specificityScore > 75) {
+    feedback = 'Strong answer with good concrete details and relevant technical context. Keep up the clear impact-driven delivery!';
+  }
+
+  return {
+    starScore,
+    specificityScore,
+    relevanceScore,
+    scoreOverall,
+    feedback,
+    source: 'heuristic_fallback',
+  };
+}
+
+export async function generateSessionSummaryWithGemini(
+  targetRole: string,
+  answers: Array<{ questionText: string; transcript: string; evaluation: AnswerEvaluationResult }>
+): Promise<SessionSummaryResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  
+  const validEvaluations = answers.map((a) => a.evaluation).filter(Boolean);
+  const avgStar = validEvaluations.length > 0 ? Math.round(validEvaluations.reduce((s, e) => s + e.starScore, 0) / validEvaluations.length) : 70;
+  const avgSpec = validEvaluations.length > 0 ? Math.round(validEvaluations.reduce((s, e) => s + e.specificityScore, 0) / validEvaluations.length) : 70;
+  const avgRel = validEvaluations.length > 0 ? Math.round(validEvaluations.reduce((s, e) => s + e.relevanceScore, 0) / validEvaluations.length) : 70;
+  const overallScore = Math.round((avgStar + avgSpec + avgRel) / 3);
+
+  if (!apiKey || validEvaluations.length === 0) {
+    return fallbackSessionSummary(targetRole, overallScore, avgStar, avgSpec, avgRel);
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = `Synthesize an end-of-session performance summary for a candidate interviewing for "${targetRole}".
+
+SUMMARY OF QUESTIONS AND CANDIDATE ANSWERS:
+${answers
+  .map(
+    (a, i) => `Q${i + 1}: "${a.questionText}"
+Candidate Answer: "${a.transcript}"
+Scores: STAR=${a.evaluation.starScore}, Specificity=${a.evaluation.specificityScore}, Relevance=${a.evaluation.relevanceScore}
+Feedback: "${a.evaluation.feedback}"`
+  )
+  .join('\n\n')}
+
+Analyze all candidate responses across the session.
+Synthesize:
+1. overallScore (integer 0-100)
+2. averageStarScore (integer 0-100)
+3. averageSpecificityScore (integer 0-100)
+4. averageRelevanceScore (integer 0-100)
+5. topImprovementAreas: Exactly 2 clear, actionable bullet points highlighting the candidate's top 2 areas to improve across the interview.
+6. summaryText: A 2-3 sentence overall evaluation summary.
+
+Return ONLY a JSON object matching the schema.`;
+
+  const modelsToTry = await getAvailableGeminiModels(ai);
+
+  for (const modelName of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: sessionSummaryJsonSchema,
+          temperature: 0.3,
+        },
+      });
+
+      const responseText = response.text;
+      if (responseText) {
+        const parsed = JSON.parse(responseText);
+        if (
+          Array.isArray(parsed.topImprovementAreas) &&
+          parsed.topImprovementAreas.length >= 2 &&
+          typeof parsed.summaryText === 'string'
+        ) {
+          console.log(`✨ Generated interview session summary using model ${modelName}`);
+          return {
+            overallScore: Math.round(parsed.overallScore || overallScore),
+            averageStarScore: Math.round(parsed.averageStarScore || avgStar),
+            averageSpecificityScore: Math.round(parsed.averageSpecificityScore || avgSpec),
+            averageRelevanceScore: Math.round(parsed.averageRelevanceScore || avgRel),
+            topImprovementAreas: parsed.topImprovementAreas.slice(0, 2).map((s: string) => s.trim()),
+            summaryText: parsed.summaryText.trim(),
+            source: 'ai',
+            modelUsed: modelName,
+          };
+        }
+      }
+    } catch (err: any) {
+      console.warn(`Gemini model ${modelName} session summary generation failed:`, err?.message || err);
+    }
+  }
+
+  return fallbackSessionSummary(targetRole, overallScore, avgStar, avgSpec, avgRel);
+}
+
+function fallbackSessionSummary(
+  targetRole: string,
+  overallScore: number,
+  avgStar: number,
+  avgSpec: number,
+  avgRel: number
+): SessionSummaryResult {
+  const topImprovementAreas = [
+    `Incorporate quantifiable impact and specific metrics (e.g. percentages, benchmarks) into your answers to strengthen specificity for ${targetRole} positions.`,
+    `Ensure every story strictly follows the STAR method, emphasizing the concrete Actions YOU personally took and the final business/technical Results achieved.`,
+  ];
+
+  return {
+    overallScore,
+    averageStarScore: avgStar,
+    averageSpecificityScore: avgSpec,
+    averageRelevanceScore: avgRel,
+    topImprovementAreas,
+    summaryText: `Solid mock interview performance for ${targetRole}. You demonstrated clear domain understanding; focusing on STAR structure and quantifiable metrics will further elevate your delivery.`,
+    source: 'heuristic_fallback',
+  };
+}
+
 
 

@@ -41,6 +41,25 @@ interface TranscriptEntry {
   text: string;
   timestamp: string;
   isStreaming?: boolean;
+  questionId?: string;
+}
+
+interface AnswerEvaluation {
+  starScore: number;
+  specificityScore: number;
+  relevanceScore: number;
+  scoreOverall: number;
+  feedback: string;
+  isEvaluating?: boolean;
+}
+
+interface SessionSummaryData {
+  overallScore: number;
+  averageStarScore: number;
+  averageSpecificityScore: number;
+  averageRelevanceScore: number;
+  topImprovementAreas: string[];
+  summaryText: string;
 }
 
 // Convert 32-bit Float32Array audio samples to 16-bit PCM Int16 ArrayBuffer
@@ -88,6 +107,14 @@ export const InterviewSession: React.FC = () => {
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
 
+  // Per-Question Answer Evaluations & Session Summary State
+  const [evaluations, setEvaluations] = useState<Record<string, AnswerEvaluation>>({});
+  const [sessionSummary, setSessionSummary] = useState<SessionSummaryData | null>(null);
+
+  const sessionRef = useRef<SessionData | null>(null);
+  const currentQuestionIndexRef = useRef<number>(0);
+  const lastEvaluatedQuestionIdRef = useRef<string | null>(null);
+
   // Web API References
   const wsRef = useRef<WebSocket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -108,6 +135,65 @@ export const InterviewSession: React.FC = () => {
   const playbackAudioCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
 
+  const triggerAnswerEvaluation = (questionId: string, transcriptText: string) => {
+    if (!questionId || !transcriptText.trim()) return;
+    if (lastEvaluatedQuestionIdRef.current === questionId) return;
+    lastEvaluatedQuestionIdRef.current = questionId;
+
+    setEvaluations((prev) => ({
+      ...prev,
+      [questionId]: {
+        starScore: prev[questionId]?.starScore || 0,
+        specificityScore: prev[questionId]?.specificityScore || 0,
+        relevanceScore: prev[questionId]?.relevanceScore || 0,
+        scoreOverall: prev[questionId]?.scoreOverall || 0,
+        feedback: prev[questionId]?.feedback || '',
+        isEvaluating: true,
+      },
+    }));
+
+    fetch(`${API_BASE_URL}/api/interview/evaluate-answer`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        questionId,
+        transcript: transcriptText.trim(),
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.success && data.evaluation) {
+          console.log('✨ [UI-EVALUATION-SUCCESS] Answer evaluated for question:', questionId, data.evaluation);
+          setEvaluations((prev) => ({
+            ...prev,
+            [questionId]: {
+              ...data.evaluation,
+              isEvaluating: false,
+            },
+          }));
+
+          if (data.isSessionCompleted && data.sessionSummary) {
+            console.log('🏆 [UI-SESSION-COMPLETED] Session summary received:', data.sessionSummary);
+            setSessionSummary(data.sessionSummary);
+            setIsCompleted(true);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('⚠️ Error calling evaluate-answer endpoint:', err);
+        setEvaluations((prev) => ({
+          ...prev,
+          [questionId]: {
+            ...prev[questionId],
+            isEvaluating: false,
+          },
+        }));
+      });
+  };
+
   const transcribeFullUserTurnBuffer = () => {
     if (userTurnTotalSamplesRef.current < 8000) return;
 
@@ -127,6 +213,7 @@ export const InterviewSession: React.FC = () => {
       currentUserTurnIdRef.current = String(Date.now() + Math.random());
     }
     const turnId = currentUserTurnIdRef.current;
+    const currentQId = sessionRef.current?.questions[currentQuestionIndexRef.current]?.id;
 
     fetch(`${API_BASE_URL}/api/interview/transcribe-chunk`, {
       method: 'POST',
@@ -151,6 +238,7 @@ export const InterviewSession: React.FC = () => {
               updated[existingIdx] = {
                 ...updated[existingIdx],
                 text: fullText,
+                questionId: currentQId,
               };
               return updated;
             } else {
@@ -160,6 +248,7 @@ export const InterviewSession: React.FC = () => {
                 text: fullText,
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 isStreaming: true,
+                questionId: currentQId,
               };
               return [...prevTranscripts, newEntry];
             }
@@ -201,9 +290,35 @@ export const InterviewSession: React.FC = () => {
 
       const data = await res.json();
       if (res.ok && data.success && data.session) {
+        sessionRef.current = data.session;
         setSession(data.session);
         if (data.session.status === 'completed') {
           setIsCompleted(true);
+        }
+
+        // Populate existing answer evaluations and session summary if present
+        if (Array.isArray(data.session.questions)) {
+          const existingEvals: Record<string, AnswerEvaluation> = {};
+          data.session.questions.forEach((q: any) => {
+            if (q.answer && q.answer.evaluationJson) {
+              try {
+                const evalObj = typeof q.answer.evaluationJson === 'string' ? JSON.parse(q.answer.evaluationJson) : q.answer.evaluationJson;
+                if (evalObj && typeof evalObj.starScore === 'number') {
+                  existingEvals[q.id] = evalObj;
+                }
+              } catch (e) {}
+            }
+          });
+          setEvaluations(existingEvals);
+        }
+
+        if (data.session.summaryJson) {
+          try {
+            const sumObj = typeof data.session.summaryJson === 'string' ? JSON.parse(data.session.summaryJson) : data.session.summaryJson;
+            if (sumObj && typeof sumObj.overallScore === 'number') {
+              setSessionSummary(sumObj);
+            }
+          } catch (e) {}
         }
       } else {
         setErrorMessage(data.error || 'Failed to load interview session');
@@ -463,6 +578,8 @@ export const InterviewSession: React.FC = () => {
   // Manual Safety Net: Trigger "I'm done answering"
   const handleDoneAnswering = () => {
     transcribeFullUserTurnBuffer();
+    const currentQId = sessionRef.current?.questions[currentQuestionIndexRef.current]?.id;
+
     if (currentUserTurnIdRef.current) {
       const turnId = currentUserTurnIdRef.current;
       setTranscripts((prevTranscripts) => {
@@ -473,6 +590,13 @@ export const InterviewSession: React.FC = () => {
             ...updated[existingIdx],
             isStreaming: false,
           };
+
+          const userText = updated[existingIdx].text;
+          const qId = updated[existingIdx].questionId || currentQId;
+          if (qId && userText && userText.trim()) {
+            triggerAnswerEvaluation(qId, userText);
+            currentQuestionIndexRef.current += 1;
+          }
           return updated;
         }
         return prevTranscripts;
@@ -548,9 +672,9 @@ export const InterviewSession: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto my-8 px-4 sm:px-6">
+    <div className="max-w-4xl mx-auto my-8 px-4 sm:px-6 space-y-8">
       {/* Top Bar Navigation */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-2">
         <Button
           variant="outline"
           onClick={() => {
@@ -627,8 +751,6 @@ export const InterviewSession: React.FC = () => {
             )}
           </div>
 
-
-
           {/* Live Transcript & Conversation Window */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2">
@@ -648,7 +770,7 @@ export const InterviewSession: React.FC = () => {
 
             <div
               ref={transcriptScrollRef}
-              className="h-80 overflow-y-auto p-4 bg-slate-950/80 border border-slate-800/90 rounded-2xl space-y-4 font-mono text-sm leading-relaxed"
+              className="h-96 overflow-y-auto p-4 bg-slate-950/80 border border-slate-800/90 rounded-2xl space-y-4 font-mono text-sm leading-relaxed"
             >
               {transcripts.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 py-12">
@@ -659,22 +781,86 @@ export const InterviewSession: React.FC = () => {
 
               {/* Turn Log Entries */}
               {transcripts.map((t) => (
-                <div
-                  key={t.id}
-                  className={`p-3.5 rounded-xl border transition-all ${
-                    t.sender === 'assistant'
-                      ? 'bg-teal-950/30 border-teal-800/40 text-teal-100'
-                      : 'bg-cyan-950/30 border-cyan-800/40 text-cyan-100'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs font-sans text-slate-400 mb-1">
-                    <span className={`font-bold ${t.sender === 'assistant' ? 'text-teal-400' : 'text-cyan-400'}`}>
-                      {t.sender === 'assistant' ? '🤖 AI Interviewer' : '👤 You (Candidate)'}
-                      {t.isStreaming && <span className="ml-2 text-xs font-normal animate-pulse text-amber-400">(streaming...)</span>}
-                    </span>
-                    <span>{t.timestamp}</span>
+                <div key={t.id} className="space-y-2">
+                  <div
+                    className={`p-3.5 rounded-xl border transition-all ${
+                      t.sender === 'assistant'
+                        ? 'bg-teal-950/30 border-teal-800/40 text-teal-100'
+                        : 'bg-cyan-950/30 border-cyan-800/40 text-cyan-100'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-xs font-sans text-slate-400 mb-1">
+                      <span className={`font-bold ${t.sender === 'assistant' ? 'text-teal-400' : 'text-cyan-400'}`}>
+                        {t.sender === 'assistant' ? '🤖 AI Interviewer' : '👤 You (Candidate)'}
+                        {t.isStreaming && <span className="ml-2 text-xs font-normal animate-pulse text-amber-400">(streaming...)</span>}
+                      </span>
+                      <span>{t.timestamp}</span>
+                    </div>
+                    <p className="text-sm font-sans whitespace-pre-wrap">{t.text}</p>
                   </div>
-                  <p className="text-sm font-sans whitespace-pre-wrap">{t.text}</p>
+
+                  {/* Inline Evaluation Card for Candidate Turn */}
+                  {t.sender === 'user' && t.questionId && (
+                    <div className="ml-4">
+                      {evaluations[t.questionId]?.isEvaluating ? (
+                        <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-xs text-slate-400 flex items-center gap-2 animate-pulse font-sans">
+                          <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin" />
+                          <span>Evaluating your response with Gemini AI...</span>
+                        </div>
+                      ) : (
+                        evaluations[t.questionId] && (
+                          <div className="p-4 bg-slate-900/90 border border-teal-500/30 rounded-xl space-y-3 font-sans text-xs text-slate-200 shadow-lg animate-in fade-in duration-300">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <span className="font-semibold text-teal-400 flex items-center gap-1.5 text-xs">
+                                <Sparkles className="w-3.5 h-3.5 text-teal-400" /> Answer Evaluation
+                              </span>
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] ${
+                                  evaluations[t.questionId].scoreOverall >= 75
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                    : evaluations[t.questionId].scoreOverall >= 55
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                }`}
+                              >
+                                Overall: {evaluations[t.questionId].scoreOverall}/100
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2">
+                              <div className="p-2 bg-slate-950/70 rounded-lg border border-slate-800 text-center">
+                                <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">STAR Structure</div>
+                                <div className="text-sm font-bold text-teal-300 mt-0.5">
+                                  {evaluations[t.questionId].starScore}
+                                  <span className="text-[10px] font-normal text-slate-400">/100</span>
+                                </div>
+                              </div>
+                              <div className="p-2 bg-slate-950/70 rounded-lg border border-slate-800 text-center">
+                                <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Specificity</div>
+                                <div className="text-sm font-bold text-cyan-300 mt-0.5">
+                                  {evaluations[t.questionId].specificityScore}
+                                  <span className="text-[10px] font-normal text-slate-400">/100</span>
+                                </div>
+                              </div>
+                              <div className="p-2 bg-slate-950/70 rounded-lg border border-slate-800 text-center">
+                                <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Relevance</div>
+                                <div className="text-sm font-bold text-emerald-300 mt-0.5">
+                                  {evaluations[t.questionId].relevanceScore}
+                                  <span className="text-[10px] font-normal text-slate-400">/100</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {evaluations[t.questionId].feedback && (
+                              <div className="pt-1 text-slate-300 italic text-xs leading-relaxed">
+                                "{evaluations[t.questionId].feedback}"
+                              </div>
+                            )}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -697,6 +883,87 @@ export const InterviewSession: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* End-of-Session Performance Summary Card */}
+      {isCompleted && sessionSummary && (
+        <Card className="bg-slate-900/95 border border-teal-500/40 shadow-2xl rounded-3xl overflow-hidden text-white animate-in zoom-in-95 duration-500">
+          <CardContent className="p-6 sm:p-8 space-y-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800 pb-6">
+              <div>
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs font-semibold mb-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-teal-400" /> Interview Completed
+                </div>
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  Interview Performance Report
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Target Role: <span className="text-slate-200 font-semibold">{session?.targetRole}</span>
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 bg-slate-950/80 px-5 py-3 rounded-2xl border border-teal-500/30">
+                <div className="text-right">
+                  <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Overall Rating</div>
+                  <div className="text-2xl font-extrabold text-teal-400">
+                    {sessionSummary.overallScore}
+                    <span className="text-xs font-normal text-slate-400">/100</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Score Grid Breakdown */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-2xl">
+                <span className="text-xs text-slate-400 font-medium">Avg STAR Structure</span>
+                <div className="text-xl font-bold text-teal-300 mt-1">{sessionSummary.averageStarScore}/100</div>
+              </div>
+              <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-2xl">
+                <span className="text-xs text-slate-400 font-medium">Avg Specificity</span>
+                <div className="text-xl font-bold text-cyan-300 mt-1">{sessionSummary.averageSpecificityScore}/100</div>
+              </div>
+              <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-2xl">
+                <span className="text-xs text-slate-400 font-medium">Avg Relevance</span>
+                <div className="text-xl font-bold text-emerald-300 mt-1">{sessionSummary.averageRelevanceScore}/100</div>
+              </div>
+            </div>
+
+            {/* Executive Summary */}
+            {sessionSummary.summaryText && (
+              <div className="p-4 bg-slate-950/50 border border-slate-800 rounded-2xl">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-teal-400 mb-2">Executive Summary</h4>
+                <p className="text-sm text-slate-300 leading-relaxed">{sessionSummary.summaryText}</p>
+              </div>
+            )}
+
+            {/* Top 2 Improvement Areas */}
+            {sessionSummary.topImprovementAreas && sessionSummary.topImprovementAreas.length > 0 && (
+              <div className="p-5 bg-amber-950/20 border border-amber-500/30 rounded-2xl">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 mb-3 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-400" /> Top 2 Key Areas for Improvement
+                </h4>
+                <ul className="space-y-2">
+                  {sessionSummary.topImprovementAreas.map((area, idx) => (
+                    <li key={idx} className="flex items-start gap-2.5 text-xs text-amber-100 leading-relaxed">
+                      <span className="font-bold text-amber-400 mt-0.5">•</span>
+                      <span>{area}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <Button
+                onClick={() => navigate('/dashboard')}
+                className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-bold px-6 py-2.5 rounded-xl shadow-lg shadow-teal-500/20"
+              >
+                Return to Dashboard
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };
