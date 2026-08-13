@@ -27,9 +27,9 @@ app.use(
   })
 );
 
-// 2. Body parsing middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// 2. Body parsing middleware (allow 10mb limit for base64 audio chunk transcription)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // 3. Initialize Passport middleware
 app.use(passport.initialize());

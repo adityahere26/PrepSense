@@ -94,9 +94,82 @@ export const InterviewSession: React.FC = () => {
   const micAudioCtxRef = useRef<AudioContext | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
 
+  // Turn State & Audio Feedback Prevention
+  const isAssistantSpeakingRef = useRef<boolean>(true);
+  const assistantAudioEndTimeRef = useRef<number>(0);
+
+  // Growing PCM Buffer for Contextual User Turn Re-Transcription
+  const userTurnPcmAccumulatorRef = useRef<Int16Array[]>([]);
+  const userTurnTotalSamplesRef = useRef<number>(0);
+  const lastTranscribedSampleCountRef = useRef<number>(0);
+  const currentUserTurnIdRef = useRef<string | null>(null);
+
   // Output Audio Context for PCM Playback
   const playbackAudioCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
+
+  const transcribeFullUserTurnBuffer = () => {
+    if (userTurnTotalSamplesRef.current < 8000) return;
+
+    const totalSamples = userTurnTotalSamplesRef.current;
+    lastTranscribedSampleCountRef.current = totalSamples;
+
+    const mergedPcm = new Int16Array(totalSamples);
+    let offset = 0;
+    for (const chunk of userTurnPcmAccumulatorRef.current) {
+      mergedPcm.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    const fullTurnBase64 = arrayBufferToBase64(mergedPcm.buffer);
+
+    if (!currentUserTurnIdRef.current) {
+      currentUserTurnIdRef.current = String(Date.now() + Math.random());
+    }
+    const turnId = currentUserTurnIdRef.current;
+
+    fetch(`${API_BASE_URL}/api/interview/transcribe-chunk`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        audioData: fullTurnBase64,
+        mimeType: 'audio/pcm;rate=16000',
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.text && data.text.trim()) {
+          const fullText = data.text.trim();
+          console.log(`🎤 [CONTEXTUAL-TRANSCRIPTION] Re-transcribed full user turn (${(totalSamples / 16000).toFixed(1)}s): "${fullText}"`);
+          setTranscripts((prevTranscripts) => {
+            const existingIdx = prevTranscripts.findIndex((t) => t.id === turnId);
+            if (existingIdx !== -1) {
+              const updated = [...prevTranscripts];
+              updated[existingIdx] = {
+                ...updated[existingIdx],
+                text: fullText,
+              };
+              return updated;
+            } else {
+              const newEntry: TranscriptEntry = {
+                id: turnId,
+                sender: 'user',
+                text: fullText,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                isStreaming: true,
+              };
+              return [...prevTranscripts, newEntry];
+            }
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('⚠️ Full user-turn re-transcription request error:', err);
+      });
+  };
 
   const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -163,6 +236,7 @@ export const InterviewSession: React.FC = () => {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
           sampleRate: 16000,
         },
       });
@@ -197,6 +271,29 @@ export const InterviewSession: React.FC = () => {
             })
           );
         }
+
+        // TURN GATING: Check if assistant is currently speaking or playing audio
+        const currentAudioTime = playbackAudioCtxRef.current ? playbackAudioCtxRef.current.currentTime : 0;
+        const isAssistantAudioPlaying = currentAudioTime < assistantAudioEndTimeRef.current;
+
+        if (isAssistantSpeakingRef.current || isAssistantAudioPlaying) {
+          // Suppress mic buffer accumulation while assistant is speaking/playing audio
+          userTurnPcmAccumulatorRef.current = [];
+          userTurnTotalSamplesRef.current = 0;
+          lastTranscribedSampleCountRef.current = 0;
+          currentUserTurnIdRef.current = null;
+          return;
+        }
+
+        // Genuinely user's turn: accumulate into growing PCM buffer
+        const int16Chunk = new Int16Array(pcmBuffer);
+        userTurnPcmAccumulatorRef.current.push(int16Chunk);
+        userTurnTotalSamplesRef.current += int16Chunk.length;
+
+        // Every ~3 seconds of new audio (~48,000 samples at 16kHz), re-transcribe the full accumulated buffer
+        if (userTurnTotalSamplesRef.current - lastTranscribedSampleCountRef.current >= 48000) {
+          transcribeFullUserTurnBuffer();
+        }
       };
 
       setIsMicActive(true);
@@ -226,6 +323,14 @@ export const InterviewSession: React.FC = () => {
           } else if (msg.type === 'transcript') {
             console.log(`[CLIENT-WS-RECV] Type "transcript" [sender=${msg.sender}]: "${msg.text}"`);
             
+            if (msg.sender === 'assistant') {
+              isAssistantSpeakingRef.current = true;
+              userTurnPcmAccumulatorRef.current = [];
+              userTurnTotalSamplesRef.current = 0;
+              lastTranscribedSampleCountRef.current = 0;
+              currentUserTurnIdRef.current = null;
+            }
+
             // Immediately append transcript chunk to UI state
             setTranscripts((prevTranscripts) => {
               const lastEntry = prevTranscripts[prevTranscripts.length - 1];
@@ -252,6 +357,12 @@ export const InterviewSession: React.FC = () => {
               }
             });
           } else if (msg.type === 'audio') {
+            isAssistantSpeakingRef.current = true;
+            userTurnPcmAccumulatorRef.current = [];
+            userTurnTotalSamplesRef.current = 0;
+            lastTranscribedSampleCountRef.current = 0;
+            currentUserTurnIdRef.current = null;
+
             audioChunkRecvCount++;
             if (audioChunkRecvCount % 20 === 1) {
               console.log(`[CLIENT-WS-RECV] Type "audio" chunk #${audioChunkRecvCount} (${msg.data?.length} base64 chars)`);
@@ -261,6 +372,24 @@ export const InterviewSession: React.FC = () => {
             }
           } else if (msg.type === 'turn_complete') {
             console.log('[CLIENT-WS-RECV] Type "turn_complete"');
+
+            // Schedule assistant turn completion when audio playback finishes
+            const checkPlaybackFinished = () => {
+              const currentAudioTime = playbackAudioCtxRef.current ? playbackAudioCtxRef.current.currentTime : 0;
+              if (currentAudioTime >= assistantAudioEndTimeRef.current) {
+                console.log('🏁 [CLIENT-TURN-STATE] Assistant audio playback completed. User turn active now.');
+                isAssistantSpeakingRef.current = false;
+                userTurnPcmAccumulatorRef.current = [];
+                userTurnTotalSamplesRef.current = 0;
+                lastTranscribedSampleCountRef.current = 0;
+                currentUserTurnIdRef.current = null;
+              } else {
+                const remainingTimeMs = Math.max(50, (assistantAudioEndTimeRef.current - currentAudioTime) * 1000);
+                setTimeout(checkPlaybackFinished, remainingTimeMs);
+              }
+            };
+            checkPlaybackFinished();
+
             // Finalize active streaming turn in UI state
             setTranscripts((prevTranscripts) => {
               if (prevTranscripts.length === 0) return prevTranscripts;
@@ -323,7 +452,9 @@ export const InterviewSession: React.FC = () => {
       const now = audioCtx.currentTime;
       const startTime = Math.max(now, nextPlayTimeRef.current);
       source.start(startTime);
-      nextPlayTimeRef.current = startTime + audioBuffer.duration;
+      const duration = audioBuffer.duration;
+      nextPlayTimeRef.current = startTime + duration;
+      assistantAudioEndTimeRef.current = nextPlayTimeRef.current;
     } catch (err) {
       console.warn('Audio playback chunk error:', err);
     }
@@ -331,6 +462,23 @@ export const InterviewSession: React.FC = () => {
 
   // Manual Safety Net: Trigger "I'm done answering"
   const handleDoneAnswering = () => {
+    transcribeFullUserTurnBuffer();
+    if (currentUserTurnIdRef.current) {
+      const turnId = currentUserTurnIdRef.current;
+      setTranscripts((prevTranscripts) => {
+        const existingIdx = prevTranscripts.findIndex((t) => t.id === turnId);
+        if (existingIdx !== -1) {
+          const updated = [...prevTranscripts];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            isStreaming: false,
+          };
+          return updated;
+        }
+        return prevTranscripts;
+      });
+    }
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       console.log('[CLIENT-WS-SEND] Sending done_answering signal to WebSocket server');
       wsRef.current.send(

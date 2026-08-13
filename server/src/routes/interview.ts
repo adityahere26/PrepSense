@@ -2,7 +2,11 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { prisma } from '../db.js';
 import { authenticateJWT } from '../middleware/auth.js';
-import { generateInterviewQuestionsWithGemini, generateQuestionTTSWithGemini } from '../services/gemini.js';
+import {
+  generateInterviewQuestionsWithGemini,
+  generateQuestionTTSWithGemini,
+  transcribeAudioChunkWithGemini,
+} from '../services/gemini.js';
 
 const router = Router();
 
@@ -357,4 +361,31 @@ router.post('/session/:sessionId/answer', authenticateJWT, (req: Request, res: R
   });
 });
 
+/**
+ * POST /api/interview/transcribe-chunk
+ * Decoupled endpoint for transcribing ~3-second PCM audio chunks in near-real-time.
+ * Accepts JSON: { audioData: string, mimeType?: string }
+ * Returns: { text: string }
+ */
+router.post('/transcribe-chunk', async (req: Request, res: Response) => {
+  try {
+    const { audioData, mimeType } = req.body || {};
+
+    if (!audioData || typeof audioData !== 'string') {
+      return res.status(400).json({ error: 'Missing required base64 audioData field' });
+    }
+
+    const transcribedText = await transcribeAudioChunkWithGemini(
+      audioData,
+      mimeType || 'audio/pcm;rate=16000'
+    );
+
+    return res.json({ text: transcribedText });
+  } catch (error: any) {
+    console.error('❌ Error in transcribe-chunk endpoint:', error);
+    return res.status(500).json({ error: error.message || 'Failed to transcribe audio chunk' });
+  }
+});
+
 export default router;
+

@@ -34,7 +34,11 @@ export async function createGeminiLiveSession(
     throw new Error('GEMINI_API_KEY environment variable is not configured');
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({
+    apiKey,
+    apiVersion: 'v1alpha',
+    httpOptions: { apiVersion: 'v1alpha' },
+  });
 
   const formattedQuestions = options.questions
     .map((q) => `Question ${q.order} [${q.category}]: "${q.questionText}"`)
@@ -69,7 +73,7 @@ STRICT INTERVIEW PROTOCOL:
 
   for (const modelName of liveModelsToTry) {
     try {
-      console.log(`[GEMINI-LIVE-SVC] Connecting to Gemini Live API using model "${modelName}" for Session [${options.sessionId}]...`);
+      console.log(`[GEMINI-LIVE-SVC] Connecting to Gemini Live API (v1alpha) using model "${modelName}" for Session [${options.sessionId}]...`);
       session = await ai.live.connect({
         model: modelName,
         config: {
@@ -82,30 +86,27 @@ STRICT INTERVIEW PROTOCOL:
         },
         callbacks: {
           onopen: () => {
-            console.log(`[GEMINI-LIVE-SVC] ⚡ Gemini Live API WebSocket connected successfully (${modelName}).`);
+            console.log(`[GEMINI-LIVE-SVC] ⚡ Gemini Live API WebSocket connected successfully (${modelName}) [v1alpha].`);
           },
           onmessage: (msg: any) => {
             try {
+              const fullJsonStr = JSON.stringify(msg);
+              console.log(`[GEMINI-LIVE-FULL-RAW-JSON] ${fullJsonStr}`);
+
               const msgKeys = Object.keys(msg || {});
-              console.log(`[GEMINI-LIVE-RECV-MSG] 📩 Received Gemini Live message. Top-level keys: [${msgKeys.join(', ')}]`);
 
               for (const key of msgKeys) {
                 if (key === 'serverContent') {
                   const sc = msg.serverContent || {};
                   const scKeys = Object.keys(sc);
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [serverContent] sub-keys: [${scKeys.join(', ')}]`);
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [serverContent] flags: turnComplete=${sc.turnComplete}, interrupted=${sc.interrupted}, waitingForInput=${sc.waitingForInput}, generationComplete=${sc.generationComplete}`);
 
                   if (sc.modelTurn) {
                     const parts = sc.modelTurn.parts || [];
-                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── [modelTurn] parts count: ${parts.length}`);
                     for (const part of parts) {
                       if (part.text) {
-                        console.log(`[GEMINI-LIVE-RECV-MSG]   │   │   ├── modelTurn.text: "${part.text}"`);
                         options.onTranscriptChunk({ text: part.text, sender: 'assistant' });
                       }
                       if (part.inlineData && part.inlineData.data) {
-                        console.log(`[GEMINI-LIVE-RECV-MSG]   │   │   ├── modelTurn.inlineData audio chunk (${part.inlineData.data.length} base64 chars, ${part.inlineData.mimeType})`);
                         options.onAudioChunk({
                           data: part.inlineData.data,
                           mimeType: part.inlineData.mimeType || 'audio/pcm;rate=24000',
@@ -114,42 +115,28 @@ STRICT INTERVIEW PROTOCOL:
                     }
                   }
                   if (sc.outputTranscription?.text) {
-                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── [outputTranscription] text: "${sc.outputTranscription.text}"`);
                     options.onTranscriptChunk({
                       text: sc.outputTranscription.text,
                       sender: 'assistant',
                     });
                   }
                   if (sc.inputTranscription?.text) {
-                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── 🎤 [inputTranscription] text: "${sc.inputTranscription.text}"`);
+                    console.log(`[GEMINI-LIVE-RECV-MSG] 🎤 [inputTranscription] text: "${sc.inputTranscription.text}"`);
                     options.onTranscriptChunk({
                       text: sc.inputTranscription.text,
                       sender: 'user',
                     });
                   }
                   if (sc.interimInputTranscription?.text) {
-                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   ├── 🎤 [interimInputTranscription] text: "${sc.interimInputTranscription.text}"`);
+                    console.log(`[GEMINI-LIVE-RECV-MSG] 🎤 [interimInputTranscription] text: "${sc.interimInputTranscription.text}"`);
                     options.onTranscriptChunk({
                       text: sc.interimInputTranscription.text,
                       sender: 'user',
                     });
                   }
                   if (sc.turnComplete && options.onTurnComplete) {
-                    console.log(`[GEMINI-LIVE-RECV-MSG]   │   └── 🏁 [turnComplete] flag received from Gemini`);
                     options.onTurnComplete();
                   }
-                } else if (key === 'setupComplete') {
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [setupComplete]:`, JSON.stringify(msg.setupComplete));
-                } else if (key === 'usageMetadata') {
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [usageMetadata]:`, JSON.stringify(msg.usageMetadata));
-                } else if (key === 'goAway') {
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [goAway]:`, JSON.stringify(msg.goAway));
-                } else if (key === 'toolCall') {
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [toolCall]:`, JSON.stringify(msg.toolCall));
-                } else if (key === 'toolCallCancellation') {
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [toolCallCancellation]:`, JSON.stringify(msg.toolCallCancellation));
-                } else {
-                  console.log(`[GEMINI-LIVE-RECV-MSG]   ├── [${key}] (OTHER/UNHANDLED KEY):`, JSON.stringify(msg[key]));
                 }
               }
             } catch (msgErr) {

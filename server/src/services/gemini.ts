@@ -771,4 +771,53 @@ function generateFallbackTTSAudioBuffer(text: string): { audioBuffer: Buffer; mi
   return { audioBuffer: buffer, mimeType: 'audio/wav' };
 }
 
+export async function transcribeAudioChunkWithGemini(
+  audioBase64: string,
+  mimeType: string = 'audio/pcm;rate=16000'
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY environment variable is not configured');
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const modelsToTry = [
+    'gemini-3.1-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-flash-latest',
+    'gemini-2.5-flash-lite',
+  ];
+
+  const prompt = 'Transcribe the spoken audio verbatim in plain text. Output ONLY the exact transcribed English words spoken by the user. If the audio is silent or contains only background noise with no intelligible speech, output nothing (an empty string).';
+
+  for (const modelName of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: audioBase64,
+            },
+          },
+          prompt,
+        ],
+      });
+
+      const text = response.text ? response.text.trim() : '';
+      if (text) {
+        console.log(`[TRANSCRIPTION-SVC] Transcribed audio chunk with model ${modelName}: "${text}"`);
+        return text;
+      }
+      return '';
+    } catch (err: any) {
+      console.warn(`[TRANSCRIPTION-SVC] Model ${modelName} chunk transcription failed:`, err?.message || err);
+    }
+  }
+
+  return '';
+}
+
+
 
