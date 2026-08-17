@@ -191,7 +191,7 @@ router.get('/sessions', authenticateJWT, async (req: Request, res: Response) => 
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const sessions = await prisma.interviewSession.findMany({
+    const rawSessions = await prisma.interviewSession.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       include: {
@@ -204,6 +204,37 @@ router.get('/sessions', authenticateJWT, async (req: Request, res: Response) => 
       },
     });
 
+    const sessions = rawSessions.map((s) => {
+      let summaryObj: any = null;
+      if (s.summaryJson) {
+        try {
+          summaryObj = typeof s.summaryJson === 'string' ? JSON.parse(s.summaryJson) : s.summaryJson;
+        } catch (e) {}
+      }
+
+      const answeredQuestions = s.questions.filter(
+        (q) => q.answer && q.answer.transcript && q.answer.transcript !== '[Audio recorded - evaluation pending in next step]'
+      );
+
+      let overallScore: number | null = null;
+      if (summaryObj && typeof summaryObj.overallScore === 'number') {
+        overallScore = Math.round(summaryObj.overallScore);
+      } else if (answeredQuestions.length > 0) {
+        const scores = answeredQuestions.map((q) => q.answer!.scoreOverall).filter((score) => typeof score === 'number' && score > 0);
+        if (scores.length > 0) {
+          overallScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+        }
+      }
+
+      return {
+        ...s,
+        overallScore,
+        questionsCount: s.questions.length,
+        answeredCount: answeredQuestions.length,
+        summary: summaryObj,
+      };
+    });
+
     return res.json({
       success: true,
       sessions,
@@ -211,6 +242,150 @@ router.get('/sessions', authenticateJWT, async (req: Request, res: Response) => 
   } catch (error: any) {
     console.error('❌ Error listing interview sessions:', error);
     return res.status(500).json({ error: error.message || 'Internal server error listing interview sessions' });
+  }
+});
+
+/**
+ * GET /api/interview/analytics
+ * Aggregates recurring improvement areas and performance trends across user sessions
+ */
+router.get('/analytics', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const sessions = await prisma.interviewSession.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        questions: {
+          include: {
+            answer: true,
+          },
+        },
+      },
+    });
+
+    // 1. Build trend data for completed/evaluated sessions
+    const scoreTrend = sessions
+      .map((s) => {
+        let summaryObj: any = null;
+        if (s.summaryJson) {
+          try {
+            summaryObj = typeof s.summaryJson === 'string' ? JSON.parse(s.summaryJson) : s.summaryJson;
+          } catch (e) {}
+        }
+
+        const answeredQuestions = s.questions.filter(
+          (q) => q.answer && q.answer.transcript && q.answer.transcript !== '[Audio recorded - evaluation pending in next step]'
+        );
+
+        let overallScore: number | null = null;
+        if (summaryObj && typeof summaryObj.overallScore === 'number') {
+          overallScore = Math.round(summaryObj.overallScore);
+        } else if (answeredQuestions.length > 0) {
+          const scores = answeredQuestions.map((q) => q.answer!.scoreOverall).filter((score) => typeof score === 'number' && score > 0);
+          if (scores.length > 0) {
+            overallScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+          }
+        }
+
+        return {
+          id: s.id,
+          targetRole: s.targetRole,
+          status: s.status,
+          createdAt: s.createdAt,
+          overallScore,
+        };
+      })
+      .filter((s) => s.status === 'completed' || (s.overallScore !== null && s.overallScore > 0));
+
+    // 2. Aggregate recurring improvement themes across all evaluated answers and sessions
+    const themeCounts: Record<string, { theme: string; count: number; description: string }> = {
+      metrics: {
+        theme: 'Quantify your impact with metrics',
+        count: 0,
+        description: 'Incorporate concrete numbers, percentages, and scale to validate your achievements.',
+      },
+      star: {
+        theme: 'Structure responses with STAR method',
+        count: 0,
+        description: 'Clearly frame your Situation, Task, Action, and final business/technical Results.',
+      },
+      technical: {
+        theme: 'Highlight specific technical tools & skills',
+        count: 0,
+        description: 'Mention specific frameworks, tools, and technical methodologies used.',
+      },
+      relevance: {
+        theme: 'Address core question directly',
+        count: 0,
+        description: 'Keep your answer focused directly on the prompt without unnecessary tangents.',
+      },
+      pacing: {
+        theme: 'Maintain concise pacing & clear delivery',
+        count: 0,
+        description: 'Deliver structured answers with steady pacing and minimal filler words.',
+      },
+    };
+
+    for (const session of sessions) {
+      // Check session summary
+      if (session.summaryJson) {
+        try {
+          const summaryObj = typeof session.summaryJson === 'string' ? JSON.parse(session.summaryJson) : session.summaryJson;
+          if (Array.isArray(summaryObj.topImprovementAreas)) {
+            for (const area of summaryObj.topImprovementAreas) {
+              const lower = area.toLowerCase();
+              if (lower.includes('metric') || lower.includes('quantif') || lower.includes('percent') || lower.includes('number')) {
+                themeCounts.metrics.count += 1;
+              } else if (lower.includes('star') || lower.includes('situation') || lower.includes('action') || lower.includes('result')) {
+                themeCounts.star.count += 1;
+              } else if (lower.includes('technol') || lower.includes('tool') || lower.includes('skill') || lower.includes('detail')) {
+                themeCounts.technical.count += 1;
+              } else if (lower.includes('relevan') || lower.includes('direct') || lower.includes('question')) {
+                themeCounts.relevance.count += 1;
+              } else {
+                themeCounts.pacing.count += 1;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Check per-question answer evaluations
+      for (const q of session.questions) {
+        if (q.answer && q.answer.evaluationJson) {
+          try {
+            const evalObj = typeof q.answer.evaluationJson === 'string' ? JSON.parse(q.answer.evaluationJson) : q.answer.evaluationJson;
+            if (typeof evalObj.specificityScore === 'number' && evalObj.specificityScore < 75) {
+              themeCounts.metrics.count += 1;
+            }
+            if (typeof evalObj.starScore === 'number' && evalObj.starScore < 75) {
+              themeCounts.star.count += 1;
+            }
+            if (typeof evalObj.relevanceScore === 'number' && evalObj.relevanceScore < 75) {
+              themeCounts.relevance.count += 1;
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    const recurringImprovementAreas = Object.values(themeCounts)
+      .filter((t) => t.count > 0)
+      .sort((a, b) => b.count - a.count);
+
+    return res.json({
+      success: true,
+      scoreTrend,
+      recurringImprovementAreas,
+    });
+  } catch (error: any) {
+    console.error('❌ Error building interview analytics:', error);
+    return res.status(500).json({ error: error.message || 'Failed to fetch interview analytics' });
   }
 });
 

@@ -255,6 +255,13 @@ router.get('/group/:resumeGroupId', authenticateJWT, async (req: Request, res: R
     const versions = await prisma.resume.findMany({
       where: { userId, resumeGroupId },
       orderBy: { version: 'desc' },
+      include: {
+        analyses: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { aiQualityScore: true },
+        },
+      },
     });
 
     const formattedVersions = await Promise.all(
@@ -267,6 +274,7 @@ router.get('/group/:resumeGroupId', authenticateJWT, async (req: Request, res: R
         }
 
         const signedUrl = await getR2SignedUrl(v.fileUrl);
+        const aiQualityScore = v.analyses?.[0]?.aiQualityScore ?? null;
 
         return {
           id: v.id,
@@ -274,6 +282,7 @@ router.get('/group/:resumeGroupId', authenticateJWT, async (req: Request, res: R
           fileUrl: signedUrl,
           parsedJson: parsed,
           version: v.version,
+          aiQualityScore,
           createdAt: v.createdAt,
         };
       })
@@ -492,32 +501,59 @@ router.get('/', authenticateJWT, async (req: Request, res: Response) => {
 
     const distinctResumes = await Promise.all(
       groups.map(async (g) => {
-        const latestInGroup = await prisma.resume.findFirst({
+        const versionsInGroup = await prisma.resume.findMany({
           where: { userId, resumeGroupId: g.resumeGroupId },
           orderBy: { version: 'desc' },
+          include: {
+            analyses: {
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+              select: { aiQualityScore: true },
+            },
+          },
         });
 
-        const totalVersions = await prisma.resume.count({
-          where: { userId, resumeGroupId: g.resumeGroupId },
-        });
+        const latestInGroup = versionsInGroup[0];
+        const totalVersions = versionsInGroup.length;
 
-        const signedUrl = latestInGroup ? await getR2SignedUrl(latestInGroup.fileUrl) : '';
-        let parsed = {};
-        try {
-          parsed = latestInGroup?.parsedJson ? JSON.parse(latestInGroup.parsedJson) : {};
-        } catch (e) {
-          parsed = {};
-        }
+        const formattedVersions = await Promise.all(
+          versionsInGroup.map(async (v) => {
+            const signedUrl = await getR2SignedUrl(v.fileUrl);
+            let parsed = {};
+            try {
+              parsed = typeof v.parsedJson === 'string' ? JSON.parse(v.parsedJson) : v.parsedJson;
+            } catch (e) {
+              parsed = {};
+            }
+            const aiQualityScore = v.analyses?.[0]?.aiQualityScore ?? null;
+
+            return {
+              id: v.id,
+              resumeGroupId: v.resumeGroupId,
+              fileUrl: signedUrl,
+              parsedJson: parsed,
+              version: v.version,
+              aiQualityScore,
+              createdAt: v.createdAt,
+            };
+          })
+        );
+
+        const latestSignedUrl = formattedVersions[0]?.fileUrl || '';
+        const latestParsed = formattedVersions[0]?.parsedJson || {};
+        const latestAiQualityScore = formattedVersions[0]?.aiQualityScore ?? null;
 
         return {
           id: latestInGroup?.id,
           resumeGroupId: g.resumeGroupId,
-          fileUrl: signedUrl,
+          fileUrl: latestSignedUrl,
           targetRole: user?.targetRole || null,
-          parsedJson: parsed,
+          parsedJson: latestParsed,
           version: latestInGroup?.version || 1,
+          aiQualityScore: latestAiQualityScore,
           totalVersions,
           createdAt: latestInGroup?.createdAt,
+          versions: formattedVersions,
         };
       })
     );
