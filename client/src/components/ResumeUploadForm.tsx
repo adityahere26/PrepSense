@@ -214,7 +214,7 @@ export const ResumeUploadForm: React.FC<ResumeUploadFormProps> = ({
             onDragLeave={() => setIsDragOver(false)}
             onDrop={handleDrop}
             onClick={() => !isUploading && fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
+            className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors ${
               isDragOver
                 ? 'border-[#0d9488] bg-teal-50/60 scale-[0.99]'
                 : selectedFile

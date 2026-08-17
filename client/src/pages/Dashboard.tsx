@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
 import {
   FileText,
@@ -8,15 +9,9 @@ import {
   CheckCircle2,
   User,
   Plus,
-  MessageSquarePlus,
   Send,
-  Clock,
-  AlertCircle,
   Loader2,
   ArrowRight,
-  Upload,
-  Calendar,
-  Layers,
   TrendingUp,
   ChevronDown,
   ChevronUp,
@@ -25,9 +20,15 @@ import {
   Target,
   BarChart3,
   ExternalLink,
+  MessageSquarePlus,
+  Clock,
+  AlertCircle,
+  FileCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ApiErrorBoundary } from '../components/ApiErrorBoundary';
 import { ResumeUploadForm } from '../components/ResumeUploadForm';
 import { ParsedResumeView } from '../components/ParsedResumeView';
 import {
@@ -82,7 +83,15 @@ export interface RecurringImprovementArea {
   description: string;
 }
 
-const CustomDarkTooltip = ({ active, payload, label }: any) => {
+export interface SuccessStoryItem {
+  id: string;
+  authorName: string;
+  roleAchieved?: string | null;
+  content: string;
+  createdAt: string;
+}
+
+const CustomDarkTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -100,28 +109,109 @@ export const Dashboard: React.FC = () => {
   const { user, token } = useAuth();
   const navigate = useNavigate();
 
+  // Story submission state
   const [authorName, setAuthorName] = useState(user?.name || '');
   const [roleAchieved, setRoleAchieved] = useState(user?.targetRole || '');
   const [content, setContent] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSubmitted, setIsSubmitted] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSubmittingStory, setIsSubmittingStory] = useState(false);
+  const [isStorySubmitted, setIsStorySubmitted] = useState(false);
+  const [storyErrorMessage, setStoryErrorMessage] = useState<string | null>(null);
 
-  // Multi-Resume states
-  const [resumesList, setResumesList] = useState<ResumeGroupItem[]>([]);
-  const [activeResume, setActiveResume] = useState<ResumeGroupItem | null>(null);
-  const [isLoadingResumes, setIsLoadingResumes] = useState<boolean>(true);
+  // Local interaction states
+  const [activeResumeGroup, setActiveResumeGroup] = useState<ResumeGroupItem | null>(null);
   const [showUploadForm, setShowUploadForm] = useState<boolean>(false);
   const [targetUploadGroupId, setTargetUploadGroupId] = useState<string | undefined>(undefined);
-  const [userTargetRole, setUserTargetRole] = useState<string | null>(user?.targetRole || null);
   const [expandedVersions, setExpandedVersions] = useState<Record<string, boolean>>({});
-
-  // Interview Sessions & Analytics states
-  const [pastSessions, setPastSessions] = useState<PastSessionItem[]>([]);
-  const [isLoadingSessions, setIsLoadingSessions] = useState<boolean>(true);
-  const [recurringAreas, setRecurringAreas] = useState<RecurringImprovementArea[]>([]);
-  const [scoreTrendData, setScoreTrendData] = useState<Array<{ id: string; targetRole: string; date: string; score: number }>>([]);
   const [isStartingInterview, setIsStartingInterview] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<'resumes' | 'sessions' | 'community'>('resumes');
+
+  // 1. TanStack Query: Fetch Resumes List
+  const {
+    data: resumesList = [],
+    isLoading: isLoadingResumes,
+    isError: isErrorResumes,
+    error: errorResumes,
+    refetch: refetchResumes,
+  } = useQuery<ResumeGroupItem[]>({
+    queryKey: ['resumes', token],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/api/resume`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error('Failed to load candidate resumes');
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Server error loading resumes');
+      return data.resumes || [];
+    },
+    enabled: !!token,
+  });
+
+  // Automatically update active resume selection when resumesList changes
+  React.useEffect(() => {
+    if (resumesList.length > 0 && !activeResumeGroup) {
+      setActiveResumeGroup(resumesList[0]);
+    }
+  }, [resumesList, activeResumeGroup]);
+
+  // 2. TanStack Query: Fetch Interview Sessions & Aggregated Analytics
+  const {
+    data: sessionsData,
+    isLoading: isLoadingSessions,
+    isError: isErrorSessions,
+    error: errorSessions,
+    refetch: refetchSessions,
+  } = useQuery<{ pastSessions: PastSessionItem[]; recurringAreas: RecurringImprovementArea[]; scoreTrendData: any[] }>({
+    queryKey: ['sessionsAndAnalytics', token],
+    queryFn: async () => {
+      const sessionsRes = await fetch(`${API_BASE_URL}/api/interview/sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!sessionsRes.ok) throw new Error('Failed to load past interview sessions');
+      const sessionsJson = await sessionsRes.json();
+      const pastSessions: PastSessionItem[] = sessionsJson.sessions || [];
+
+      // Format score trend
+      const completed = pastSessions
+        .filter((s) => s.status === 'completed' || (s.overallScore !== null && s.overallScore > 0))
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+      const scoreTrendData = completed.map((s) => ({
+        id: s.id,
+        targetRole: s.targetRole,
+        date: new Date(s.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        score: s.overallScore || 0,
+      }));
+
+      // Fetch analytics
+      const analyticsRes = await fetch(`${API_BASE_URL}/api/interview/analytics`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const analyticsJson = analyticsRes.ok ? await analyticsRes.json() : {};
+      const recurringAreas: RecurringImprovementArea[] = analyticsJson.recurringImprovementAreas || [];
+
+      return { pastSessions, recurringAreas, scoreTrendData };
+    },
+    enabled: !!token,
+  });
+
+  const pastSessions = sessionsData?.pastSessions || [];
+  const recurringAreas = sessionsData?.recurringAreas || [];
+  const scoreTrendData = sessionsData?.scoreTrendData || [];
+
+  // 3. TanStack Query: Fetch Success Stories
+  const {
+    data: successStories = [],
+    isLoading: isLoadingStories,
+    refetch: refetchStories,
+  } = useQuery<SuccessStoryItem[]>({
+    queryKey: ['successStories'],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/success-stories`);
+      if (!res.ok) throw new Error('Failed to load success stories');
+      const data = await res.json();
+      return data.stories || [];
+    },
+  });
 
   const handleStartMockInterview = async (resumeId: string, targetRole: string) => {
     if (!token) return;
@@ -135,7 +225,7 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           resumeId,
-          targetRole: targetRole || 'Software Engineer',
+          targetRole: targetRole || user?.targetRole || 'Software Engineer',
         }),
       });
 
@@ -150,91 +240,6 @@ export const Dashboard: React.FC = () => {
       alert('Network error initiating mock interview session.');
     } finally {
       setIsStartingInterview(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchResumes();
-    fetchSessionsAndAnalytics();
-  }, [token]);
-
-  const fetchResumes = async () => {
-    if (!token) return;
-    setIsLoadingResumes(true);
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/resume`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      const data = await response.json();
-      if (response.ok && data.success && Array.isArray(data.resumes)) {
-        setResumesList(data.resumes);
-        if (data.resumes.length > 0) {
-          setActiveResume((prev) => {
-            if (prev) {
-              const updated = data.resumes.find((r: ResumeGroupItem) => r.resumeGroupId === prev.resumeGroupId);
-              return updated || data.resumes[0];
-            }
-            return data.resumes[0];
-          });
-          if (data.resumes[0].targetRole) {
-            setUserTargetRole(data.resumes[0].targetRole);
-          }
-        } else {
-          setActiveResume(null);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch user resumes list:', err);
-    } finally {
-      setIsLoadingResumes(false);
-    }
-  };
-
-  const fetchSessionsAndAnalytics = async () => {
-    if (!token) return;
-    setIsLoadingSessions(true);
-    try {
-      // 1. Fetch sessions
-      const sessionsRes = await fetch(`${API_BASE_URL}/api/interview/sessions`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const sessionsData = await sessionsRes.json();
-
-      if (sessionsRes.ok && sessionsData.success && Array.isArray(sessionsData.sessions)) {
-        setPastSessions(sessionsData.sessions);
-
-        // Prepare trend data for completed sessions sorted chronologically ascending
-        const completedSessions = sessionsData.sessions
-          .filter((s: PastSessionItem) => s.status === 'completed' || (s.overallScore !== null && s.overallScore > 0))
-          .sort((a: PastSessionItem, b: PastSessionItem) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-
-        const formattedTrend = completedSessions.map((s: PastSessionItem, index: number) => ({
-          id: s.id,
-          targetRole: s.targetRole,
-          date: new Date(s.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-          score: s.overallScore || 0,
-        }));
-
-        setScoreTrendData(formattedTrend);
-      }
-
-      // 2. Fetch aggregated analytics
-      const analyticsRes = await fetch(`${API_BASE_URL}/api/interview/analytics`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const analyticsData = await analyticsRes.json();
-
-      if (analyticsRes.ok && analyticsData.success) {
-        if (Array.isArray(analyticsData.recurringImprovementAreas)) {
-          setRecurringAreas(analyticsData.recurringImprovementAreas);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch interview sessions or analytics:', err);
-    } finally {
-      setIsLoadingSessions(false);
     }
   };
 
@@ -255,26 +260,26 @@ export const Dashboard: React.FC = () => {
     setShowUploadForm(true);
   };
 
-  const handleUploadSuccess = (uploadedResume: any) => {
+  const handleUploadSuccess = () => {
     setShowUploadForm(false);
     setTargetUploadGroupId(undefined);
-    fetchResumes();
+    refetchResumes();
   };
 
   const handleSubmitStory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!content.trim()) {
-      setErrorMessage('Please enter your success story before submitting.');
+      setStoryErrorMessage('Please enter your success story before submitting.');
       return;
     }
 
     if (content.trim().length > 500) {
-      setErrorMessage('Story must be 500 characters or less.');
+      setStoryErrorMessage('Story must be 500 characters or less.');
       return;
     }
 
-    setIsSubmitting(true);
-    setErrorMessage(null);
+    setIsSubmittingStory(true);
+    setStoryErrorMessage(null);
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/success-stories`, {
@@ -285,23 +290,23 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           authorName: authorName.trim() || user?.name || user?.email,
-          roleAchieved: roleAchieved.trim() || userTargetRole || undefined,
+          roleAchieved: roleAchieved.trim() || user?.targetRole || undefined,
           content: content.trim(),
         }),
       });
 
       const data = await response.json();
-
       if (!response.ok) {
         throw new Error(data.error || 'Failed to submit success story');
       }
 
-      setIsSubmitted(true);
+      setIsStorySubmitted(true);
       setContent('');
+      refetchStories();
     } catch (err: any) {
-      setErrorMessage(err.message || 'An error occurred. Please try again.');
+      setStoryErrorMessage(err.message || 'An error occurred. Please try again.');
     } finally {
-      setIsSubmitting(false);
+      setIsSubmittingStory(false);
     }
   };
 
@@ -313,26 +318,26 @@ export const Dashboard: React.FC = () => {
       : null;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8 animate-in fade-in duration-300">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8 animate-in fade-in duration-300">
       {/* Header Banner */}
-      <Card className="glass-panel p-8 rounded-3xl relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6 border-teal-100 bg-white/90 shadow-sm">
+      <Card className="glass-panel p-6 sm:p-8 rounded-3xl relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6 border-teal-100 bg-white/90 shadow-sm">
         <div className="space-y-2 z-10">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60 text-xs font-semibold">
             <CheckCircle2 className="w-3.5 h-3.5" />
             Authenticated Candidate Dashboard
           </div>
-          <h1 className="font-heading text-3xl font-extrabold text-[#043c44]">
+          <h1 className="font-heading text-2xl sm:text-3xl font-extrabold text-[#043c44] tracking-tight">
             Welcome back, {user?.name || user?.email}!
           </h1>
-          <p className="text-slate-600 text-sm">
-            Track your resume iterations, interview progress, score trends, and recurring areas for improvement.
+          <p className="text-slate-600 text-xs sm:text-sm max-w-xl">
+            Track your resume iterations, ATS optimization scores, voice interview practice, and recurring growth areas.
           </p>
         </div>
 
-        <div className="flex items-center gap-3 z-10 shrink-0">
+        <div className="flex items-center gap-3 z-10 w-full sm:w-auto shrink-0">
           <Button
             onClick={handleStartNewResumeUpload}
-            className="px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-sm transition-all shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44]"
+            className="w-full sm:w-auto px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs sm:text-sm transition-colors shadow-md shadow-[#043c44]/20 flex items-center justify-center gap-2 border border-[#043c44]"
           >
             <Plus className="w-4 h-4 text-teal-300" />
             Upload New Resume
@@ -343,26 +348,30 @@ export const Dashboard: React.FC = () => {
         <div className="absolute -bottom-16 -right-16 w-64 h-64 bg-teal-400/10 rounded-full blur-3xl pointer-events-none" />
       </Card>
 
-      {/* Dashboard Top Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card className="glass-panel p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
+      {/* Dashboard Top Stats Cards Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+        <Card className="glass-panel p-5 sm:p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
           <CardHeader className="p-0 flex flex-row items-center justify-between space-y-0 text-slate-500">
             <CardTitle className="text-xs font-semibold uppercase tracking-wider text-slate-500 font-sans">User Account</CardTitle>
             <User className="w-4 h-4 text-[#0d9488]" />
           </CardHeader>
           <CardContent className="p-0 space-y-1">
-            <p className="text-lg font-bold text-[#043c44] truncate">{user?.email}</p>
+            <p className="text-base sm:text-lg font-bold text-[#043c44] truncate">{user?.email}</p>
             <CardDescription className="text-xs text-slate-500">Candidate Workspace</CardDescription>
           </CardContent>
         </Card>
 
-        <Card className="glass-panel p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
+        <Card className="glass-panel p-5 sm:p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
           <CardHeader className="p-0 flex flex-row items-center justify-between space-y-0 text-slate-500">
             <CardTitle className="text-xs font-semibold uppercase tracking-wider text-slate-500 font-sans">Resumes Parsed</CardTitle>
             <FileText className="w-4 h-4 text-[#06b6d4]" />
           </CardHeader>
           <CardContent className="p-0 space-y-1">
-            <p className="text-3xl font-extrabold text-[#043c44]">{resumesList.length}</p>
+            {isLoadingResumes ? (
+              <Skeleton className="h-9 w-16" />
+            ) : (
+              <p className="text-2xl sm:text-3xl font-extrabold text-[#043c44]">{resumesList.length}</p>
+            )}
             <CardDescription className="text-xs text-slate-500">
               {resumesList.length === 1
                 ? '1 distinct resume group'
@@ -373,28 +382,36 @@ export const Dashboard: React.FC = () => {
           </CardContent>
         </Card>
 
-        <Card className="glass-panel p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
+        <Card className="glass-panel p-5 sm:p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
           <CardHeader className="p-0 flex flex-row items-center justify-between space-y-0 text-slate-500">
             <CardTitle className="text-xs font-semibold uppercase tracking-wider text-slate-500 font-sans">Interview Sessions</CardTitle>
             <Mic className="w-4 h-4 text-[#10b981]" />
           </CardHeader>
           <CardContent className="p-0 space-y-1">
-            <p className="text-3xl font-extrabold text-[#043c44]">{pastSessions.length}</p>
+            {isLoadingSessions ? (
+              <Skeleton className="h-9 w-16" />
+            ) : (
+              <p className="text-2xl sm:text-3xl font-extrabold text-[#043c44]">{pastSessions.length}</p>
+            )}
             <CardDescription className="text-xs text-slate-500">
               {completedSessions.length} completed session{completedSessions.length === 1 ? '' : 's'}
             </CardDescription>
           </CardContent>
         </Card>
 
-        <Card className="glass-panel p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
+        <Card className="glass-panel p-5 sm:p-6 rounded-2xl space-y-3 border-teal-100 bg-white/90 shadow-xs">
           <CardHeader className="p-0 flex flex-row items-center justify-between space-y-0 text-slate-500">
             <CardTitle className="text-xs font-semibold uppercase tracking-wider text-slate-500 font-sans">Average Score</CardTitle>
             <Award className="w-4 h-4 text-[#0d9488]" />
           </CardHeader>
           <CardContent className="p-0 space-y-1">
-            <p className="text-3xl font-extrabold text-[#043c44]">
-              {avgInterviewScore !== null ? `${avgInterviewScore}/100` : '--'}
-            </p>
+            {isLoadingSessions ? (
+              <Skeleton className="h-9 w-20" />
+            ) : (
+              <p className="text-2xl sm:text-3xl font-extrabold text-[#043c44]">
+                {avgInterviewScore !== null ? `${avgInterviewScore}/100` : '--'}
+              </p>
+            )}
             <CardDescription className="text-xs text-slate-500">
               {completedSessions.length > 0 ? 'Across completed interviews' : 'Complete 1 session to score'}
             </CardDescription>
@@ -404,20 +421,20 @@ export const Dashboard: React.FC = () => {
 
       {/* Analytics & Score Progress Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Requirement (3): Recharts Line Chart for Score Trend */}
-        <Card className="glass-panel lg:col-span-2 p-6 rounded-3xl space-y-4 border-teal-100 bg-white/90 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        {/* Recharts Line Chart for Score Trend */}
+        <Card className="glass-panel lg:col-span-2 p-5 sm:p-6 rounded-3xl space-y-4 border-teal-100 bg-white/90 shadow-sm flex flex-col justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <TrendingUp className="w-5 h-5 text-[#0d9488]" />
-                <h2 className="font-heading font-bold text-xl text-[#043c44]">Interview Score Progress</h2>
+                <h2 className="font-heading font-bold text-lg sm:text-xl text-[#043c44]">Interview Score Progress</h2>
               </div>
               <p className="text-xs text-slate-500">
-                Track overall mock interview scores across completed sessions in chronological order.
+                Track overall mock interview performance trends across completed voice sessions.
               </p>
             </div>
             {scoreTrendData.length >= 2 && (
-              <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-extrabold flex items-center gap-1">
+              <span className="self-start sm:self-auto px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-extrabold flex items-center gap-1">
                 <TrendingUp className="w-3.5 h-3.5" />
                 {scoreTrendData[scoreTrendData.length - 1].score - scoreTrendData[0].score >= 0
                   ? `+${scoreTrendData[scoreTrendData.length - 1].score - scoreTrendData[0].score} pts trend`
@@ -426,21 +443,32 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
 
-          {scoreTrendData.length < 2 ? (
-            <div className="glass-panel p-8 rounded-2xl text-center space-y-3 border-teal-100/60 bg-teal-50/40 my-4 flex flex-col items-center justify-center min-h-[220px]">
+          {isLoadingSessions ? (
+            <div className="py-8 space-y-3">
+              <Skeleton className="h-44 w-full rounded-2xl" />
+            </div>
+          ) : isErrorSessions ? (
+            <ApiErrorBoundary
+              title="Failed to Load Score Trend"
+              error={errorSessions}
+              onRetry={refetchSessions}
+              className="my-4"
+            />
+          ) : scoreTrendData.length < 2 ? (
+            <div className="glass-panel p-6 sm:p-8 rounded-2xl text-center space-y-3 border-teal-100/60 bg-teal-50/40 my-4 flex flex-col items-center justify-center min-h-[220px]">
               <div className="w-12 h-12 rounded-2xl bg-white border border-teal-200 flex items-center justify-center text-[#0d9488] shadow-xs">
                 <BarChart3 className="w-6 h-6" />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1 max-w-sm">
                 <p className="font-bold text-sm text-[#043c44]">Complete a few sessions to see your trend</p>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
-                  You need at least 2 completed mock interview sessions to visualize your score progression and track improvement over time.
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  You need at least 2 completed mock interview sessions to visualize score progression and track performance improvement.
                 </p>
               </div>
-              {activeResume && (
+              {resumesList.length > 0 && (
                 <Button
-                  onClick={() => handleStartMockInterview(activeResume.id, activeResume.targetRole || 'Software Engineer')}
-                  className="px-4 py-2 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-all flex items-center gap-2 mt-2"
+                  onClick={() => handleStartMockInterview(resumesList[0].id, resumesList[0].targetRole || 'Software Engineer')}
+                  className="px-4 py-2 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-colors flex items-center gap-2 mt-2"
                 >
                   <Mic className="w-3.5 h-3.5 text-teal-300" />
                   Start a Mock Session
@@ -448,12 +476,12 @@ export const Dashboard: React.FC = () => {
               )}
             </div>
           ) : (
-            <div className="w-full pt-2">
-              <ResponsiveContainer width="100%" height={240}>
-                <LineChart data={scoreTrendData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
+            <div className="w-full pt-2 min-h-[220px]">
+              <ResponsiveContainer width="100%" height={230}>
+                <LineChart data={scoreTrendData} margin={{ top: 10, right: 15, left: -25, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                  <XAxis dataKey="date" stroke="#64748b" fontSize={12} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} />
-                  <YAxis domain={[0, 100]} stroke="#64748b" fontSize={12} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} />
+                  <XAxis dataKey="date" stroke="#64748b" fontSize={11} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} />
+                  <YAxis domain={[0, 100]} stroke="#64748b" fontSize={11} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} />
                   <Tooltip content={<CustomDarkTooltip />} />
                   <Line
                     type="monotone"
@@ -461,7 +489,7 @@ export const Dashboard: React.FC = () => {
                     stroke="#0d9488"
                     strokeWidth={3}
                     dot={{ r: 5, fill: '#0d9488', strokeWidth: 2, stroke: '#ffffff' }}
-                    activeDot={{ r: 8, fill: '#043c44', stroke: '#0d9488', strokeWidth: 3 }}
+                    activeDot={{ r: 7, fill: '#043c44', stroke: '#0d9488', strokeWidth: 3 }}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -469,24 +497,29 @@ export const Dashboard: React.FC = () => {
           )}
         </Card>
 
-        {/* Requirement (4): Card Aggregating Most Frequently Recurring Improvement Areas */}
-        <Card className="glass-panel p-6 rounded-3xl space-y-4 border-teal-100 bg-white/90 shadow-sm flex flex-col justify-between">
+        {/* Aggregated Most Frequently Recurring Improvement Areas */}
+        <Card className="glass-panel p-5 sm:p-6 rounded-3xl space-y-4 border-teal-100 bg-white/90 shadow-sm flex flex-col justify-between">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-[#0d9488]" />
-              <h2 className="font-heading font-bold text-xl text-[#043c44]">Recurring Improvement Areas</h2>
+              <h2 className="font-heading font-bold text-lg sm:text-xl text-[#043c44]">Recurring Weak Areas</h2>
             </div>
             <p className="text-xs text-slate-500">
-              Aggregated themes extracted across all your evaluated interview answers.
+              Aggregated growth themes extracted across evaluated interview answers.
             </p>
           </div>
 
-          {recurringAreas.length === 0 ? (
+          {isLoadingSessions ? (
+            <div className="space-y-3 py-2">
+              <Skeleton className="h-16 w-full rounded-2xl" />
+              <Skeleton className="h-16 w-full rounded-2xl" />
+            </div>
+          ) : recurringAreas.length === 0 ? (
             <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200/80 text-center space-y-2 my-auto">
               <Target className="w-6 h-6 text-slate-400 mx-auto" />
               <p className="text-xs font-semibold text-slate-700">No recurring feedback themes yet</p>
-              <p className="text-[11px] text-slate-500">
-                Complete mock interview sessions to identify recurring strengths and key growth areas across candidate answers.
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Complete voice mock interview sessions to unlock AI insights into your communication patterns and key focus areas.
               </p>
             </div>
           ) : (
@@ -494,475 +527,558 @@ export const Dashboard: React.FC = () => {
               {recurringAreas.slice(0, 4).map((area, idx) => (
                 <div
                   key={idx}
-                  className="p-3.5 rounded-2xl bg-gradient-to-r from-teal-50/70 to-slate-50 border border-teal-100 hover:border-teal-300 transition-all space-y-1"
+                  className="p-3.5 rounded-2xl bg-gradient-to-r from-teal-50/70 to-slate-50 border border-teal-100 hover:border-teal-300 transition-colors duration-150 space-y-1"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-bold text-[#043c44] flex items-center gap-1.5 truncate">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#0d9488] shrink-0" />
+                      <Target className="w-3.5 h-3.5 text-[#0d9488] shrink-0" />
                       {area.theme}
                     </p>
-                    <span className="px-2 py-0.5 rounded-full bg-teal-100/80 text-[#0d9488] font-extrabold text-[10px] shrink-0 border border-teal-200/80">
-                      {area.count} {area.count === 1 ? 'occurrence' : 'occurrences'}
+                    <span className="px-2 py-0.5 rounded-full bg-teal-100/80 text-[#0d9488] text-[10px] font-extrabold shrink-0">
+                      {area.count} {area.count === 1 ? 'flag' : 'flags'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 leading-snug pl-3">{area.description}</p>
+                  <p className="text-[11px] text-slate-600 leading-relaxed line-clamp-2">{area.description}</p>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <span>Aggregated across user responses</span>
-            <span className="font-semibold text-[#0d9488]">{recurringAreas.length} themes identified</span>
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Updated after each evaluation</span>
+            <span className="font-semibold text-[#0d9488]">STAR Feedback</span>
           </div>
         </Card>
       </div>
 
-      {/* Requirement (2): Past Interview Sessions List */}
-      <Card className="glass-panel p-8 rounded-3xl space-y-6 border-teal-100 bg-white/90 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <History className="w-5 h-5 text-[#0d9488]" />
-              <h2 className="font-heading font-bold text-xl text-[#043c44]">Past Mock Interview Sessions</h2>
-            </div>
-            <p className="text-xs text-slate-500">
-              Review transcripts, STAR evaluations, and per-question score breakdowns for previous practice sessions.
-            </p>
+      {/* Main Content Tabs Navigation */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between border-b border-slate-200/80 pb-3 gap-4 overflow-x-auto">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveTab('resumes')}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === 'resumes'
+                  ? 'bg-[#043c44] text-white shadow-xs'
+                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-teal-50/60 hover:text-[#043c44]'
+              }`}
+            >
+              <FileText className="w-4 h-4 text-teal-300" />
+              Resumes ({resumesList.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('sessions')}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === 'sessions'
+                  ? 'bg-[#043c44] text-white shadow-xs'
+                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-teal-50/60 hover:text-[#043c44]'
+              }`}
+            >
+              <Mic className="w-4 h-4 text-teal-300" />
+              Mock Sessions ({pastSessions.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('community')}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === 'community'
+                  ? 'bg-[#043c44] text-white shadow-xs'
+                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-teal-50/60 hover:text-[#043c44]'
+              }`}
+            >
+              <MessageSquarePlus className="w-4 h-4 text-teal-300" />
+              Share Story
+            </button>
           </div>
 
-          {activeResume && (
+          {activeTab === 'resumes' && (
             <Button
-              onClick={() => handleStartMockInterview(activeResume.id, activeResume.targetRole || 'Software Engineer')}
-              disabled={isStartingInterview}
-              className="px-4 py-2 h-auto rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white font-bold text-xs transition-all flex items-center gap-2 shadow-xs"
+              size="sm"
+              onClick={handleStartNewResumeUpload}
+              className="text-xs font-semibold rounded-xl bg-teal-50 text-[#043c44] border border-teal-200/80 hover:bg-teal-100 shrink-0"
             >
-              {isStartingInterview ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-200" />
-                  Starting Session...
-                </>
-              ) : (
-                <>
-                  <Mic className="w-3.5 h-3.5 text-teal-200" />
-                  + New Interview Session
-                </>
-              )}
+              <Plus className="w-3.5 h-3.5 mr-1" /> Upload Resume
             </Button>
           )}
         </div>
 
-        {isLoadingSessions ? (
-          <div className="p-8 text-center space-y-2">
-            <Loader2 className="w-6 h-6 text-[#0d9488] animate-spin mx-auto" />
-            <p className="text-xs font-semibold text-slate-600">Loading interview sessions...</p>
-          </div>
-        ) : pastSessions.length === 0 ? (
-          <div className="p-8 rounded-2xl bg-slate-50/80 border border-slate-200/80 text-center space-y-3">
-            <Mic className="w-8 h-8 text-slate-400 mx-auto" />
-            <div className="space-y-1">
-              <p className="text-sm font-bold text-[#043c44]">No Practice Sessions Completed Yet</p>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Start a voice mock interview to answer role-specific questions and receive structured feedback on STAR framework, specificity, and relevance.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {pastSessions.map((session) => {
-              const formattedDate = session.createdAt
-                ? new Date(session.createdAt).toLocaleDateString(undefined, {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
-                : 'Recent Session';
-
-              const isCompleted = session.status === 'completed';
-
-              return (
-                <div
-                  key={session.id}
-                  onClick={() => navigate(`/interview/${session.id}`)}
-                  className="glass-panel p-5 rounded-2xl border border-slate-200/90 hover:border-teal-400 bg-white hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-4 group"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="px-2.5 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60 text-xs font-bold truncate">
-                        {session.targetRole}
-                      </span>
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border shrink-0 flex items-center gap-1 ${
-                          isCompleted
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-amber-50 text-amber-700 border-amber-200'
-                        }`}
-                      >
-                        {isCompleted ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                        {isCompleted ? 'Completed' : 'In Progress'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-1">
-                        <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                        {formattedDate}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                    <div>
-                      <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Overall Score</p>
-                      <p className="text-lg font-extrabold text-[#043c44]">
-                        {session.overallScore !== null ? `${session.overallScore}/100` : '--'}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-1 text-xs font-bold text-[#0d9488] group-hover:translate-x-1 transition-transform">
-                      <span>View Detail</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Card>
-
-      {/* Upload Form Modal/View */}
-      {showUploadForm && (
-        <ResumeUploadForm
-          initialTargetRole={
-            targetUploadGroupId
-              ? resumesList.find((r) => r.resumeGroupId === targetUploadGroupId)?.targetRole || ''
-              : ''
-          }
-          resumeGroupId={targetUploadGroupId}
-          onUploadSuccess={handleUploadSuccess}
-          onCancel={() => setShowUploadForm(false)}
-        />
-      )}
-
-      {/* Requirement (1): Resume Groups Cards Grid with Version History */}
-      {isLoadingResumes ? (
-        <Card className="glass-panel p-12 rounded-3xl text-center space-y-3 border-teal-100 bg-white/90 shadow-xs">
-          <Loader2 className="w-8 h-8 text-[#0d9488] animate-spin mx-auto" />
-          <p className="text-sm font-semibold text-[#043c44]">Loading resume profiles...</p>
-        </Card>
-      ) : resumesList.length > 0 ? (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="font-heading text-xl font-bold text-[#043c44]">
-                Your Independent Resumes ({resumesList.length})
-              </h2>
-              <p className="text-xs text-slate-500">
-                Select a resume to view its structured parsed fields, Gemini AI audit, and version history.
-              </p>
-            </div>
-            <Button
-              onClick={handleStartNewResumeUpload}
-              variant="outline"
-              className="px-4 py-2 h-auto text-xs font-semibold border-teal-200 text-[#0d9488] hover:bg-teal-50 rounded-xl"
-            >
-              + Upload Another Resume
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {resumesList.map((item) => {
-              const isSelected = activeResume?.resumeGroupId === item.resumeGroupId;
-              const candidateName = item.parsedJson?.contact?.name || 'Resume Profile';
-              const createdDate = item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'Recently uploaded';
-              const versions = item.versions || [];
-              const isExpanded = Boolean(expandedVersions[item.resumeGroupId]);
-
-              return (
-                <Card
-                  key={item.resumeGroupId}
-                  className={`glass-panel p-6 rounded-3xl border transition-all cursor-pointer space-y-4 flex flex-col justify-between relative overflow-hidden ${
-                    isSelected
-                      ? 'border-[#0d9488] ring-2 ring-[#0d9488]/20 bg-white shadow-md'
-                      : 'border-slate-200/90 bg-white/80 hover:border-teal-300 hover:shadow-xs'
-                  }`}
-                  onClick={() => setActiveResume(item)}
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="px-3 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60 text-xs font-bold truncate max-w-[180px]">
-                        Target: {item.targetRole || 'Professional'}
-                      </span>
-                      <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-extrabold text-[11px] border border-slate-200 shrink-0">
-                        v{item.version} ({item.totalVersions} {item.totalVersions === 1 ? 'ver' : 'vers'})
-                      </span>
-                    </div>
-
-                    <div>
-                      <h3 className="font-heading font-extrabold text-lg text-[#043c44] truncate">
-                        {candidateName}
-                      </h3>
-                      <div className="flex items-center justify-between mt-1">
-                        <p className="text-xs text-slate-500 flex items-center gap-1">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          Uploaded {createdDate}
-                        </p>
-                        {item.aiQualityScore !== undefined && item.aiQualityScore !== null && (
-                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-extrabold">
-                            AI Score: {item.aiQualityScore}/100
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {item.parsedJson?.skills && item.parsedJson.skills.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {item.parsedJson.skills.slice(0, 3).map((s: string, idx: number) => (
-                          <span
-                            key={idx}
-                            className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-medium"
-                          >
-                            {s}
-                          </span>
-                        ))}
-                        {item.parsedJson.skills.length > 3 && (
-                          <span className="text-[10px] px-1.5 py-0.5 text-slate-400 font-medium">
-                            +{item.parsedJson.skills.length - 3} more
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Requirement (1): Version History Section under each resume group */}
-                  <div className="pt-3 border-t border-slate-100 space-y-3" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={() => toggleVersionExpand(item.resumeGroupId)}
-                      className="w-full flex items-center justify-between text-xs font-bold text-slate-600 hover:text-[#0d9488] transition-colors py-1"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <History className="w-3.5 h-3.5 text-[#0d9488]" />
-                        Version History ({versions.length > 0 ? versions.length : item.totalVersions} {item.totalVersions === 1 ? 'version' : 'versions'})
-                      </span>
-                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    </button>
-
-                    {isExpanded && (
-                      <div className="space-y-2 pt-1 animate-in fade-in duration-200">
-                        {versions.map((ver) => {
-                          const verDate = ver.createdAt ? new Date(ver.createdAt).toLocaleDateString() : '';
-                          const isVerActive = activeResume?.id === ver.id;
-
-                          return (
-                            <div
-                              key={ver.id}
-                              onClick={() => setActiveResume(ver as any)}
-                              className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 cursor-pointer transition-all ${
-                                isVerActive
-                                  ? 'bg-teal-50/80 border-[#0d9488] font-semibold text-[#043c44]'
-                                  : 'bg-slate-50/80 border-slate-200 hover:bg-teal-50/40 text-slate-700'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2 truncate">
-                                <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[10px] font-extrabold text-slate-700 shrink-0">
-                                  v{ver.version}
-                                </span>
-                                <span className="text-[11px] text-slate-500 truncate">{verDate}</span>
-                              </div>
-
-                              <div className="flex items-center gap-2 shrink-0">
-                                {ver.aiQualityScore !== undefined && ver.aiQualityScore !== null ? (
-                                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                                    {ver.aiQualityScore}/100
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] text-slate-400 italic">Not analyzed</span>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between pt-2 text-xs font-bold">
-                      <span className={`flex items-center gap-1 ${isSelected ? 'text-[#0d9488]' : 'text-slate-500'}`}>
-                        {isSelected ? 'Active Profile' : 'Click to Select'}
-                      </span>
-
-                      <button
-                        onClick={() => handleStartNewVersionUpload(item.resumeGroupId)}
-                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-[#0d9488] transition-colors text-[11px] font-bold flex items-center gap-1 border border-slate-200"
-                      >
-                        <Upload className="w-3 h-3" />
-                        + Upload New Ver
-                      </button>
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        </div>
-      ) : !showUploadForm ? (
-        <Card className="glass-panel p-12 rounded-3xl text-center space-y-4 border-teal-100 bg-white/90 shadow-xs">
-          <div className="w-12 h-12 rounded-2xl bg-teal-50 border border-teal-200 flex items-center justify-center mx-auto text-[#0d9488]">
-            <FileText className="w-6 h-6" />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-lg font-bold text-[#043c44]">No Resumes Uploaded Yet</h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Upload your PDF or Word resume to extract structured candidate details, execute deterministic format checks, and run role-specific AI content quality audits.
-            </p>
-          </div>
-          <Button
-            onClick={handleStartNewResumeUpload}
-            className="px-6 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-all shadow-md shadow-[#043c44]/20 inline-flex items-center gap-2 border border-[#043c44]"
-          >
-            <Plus className="w-4 h-4 text-teal-300" />
-            Upload Your First Resume
-          </Button>
-        </Card>
-      ) : null}
-
-      {/* Selected Active Resume Workspace */}
-      {activeResume && !showUploadForm && (
-        <div className="space-y-4 pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-            <h3 className="font-heading font-extrabold text-xl text-[#043c44] flex items-center gap-2">
-              <Layers className="w-5 h-5 text-[#0d9488]" />
-              Active Workspace: {activeResume.targetRole || 'Resume Workspace'} (v{activeResume.version})
-            </h3>
-
-            <Button
-              onClick={() => handleStartMockInterview(activeResume.id, activeResume.targetRole || 'Software Engineer')}
-              disabled={isStartingInterview}
-              className="px-5 py-2.5 h-auto rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white font-bold text-xs transition-all shadow-md shadow-teal-600/20 flex items-center gap-2"
-            >
-              {isStartingInterview ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-teal-200" />
-                  Starting Interview...
-                </>
-              ) : (
-                <>
-                  <Mic className="w-4 h-4 text-teal-200 animate-pulse" />
-                  Start Mock Interview
-                </>
-              )}
-            </Button>
-          </div>
-
-          <ParsedResumeView
-            resume={activeResume}
-            onReupload={() => handleStartNewVersionUpload(activeResume.resumeGroupId)}
-          />
-        </div>
-      )}
-
-      {/* Share Your Success Story Form Section */}
-      <Card className="glass-panel p-8 rounded-3xl border-teal-100 bg-white/90 shadow-sm space-y-6">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-teal-50 border border-teal-200/60 flex items-center justify-center text-[#0d9488]">
-            <MessageSquarePlus className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="font-heading font-bold text-xl text-[#043c44]">Share Your Success Story</h2>
-            <p className="text-xs text-slate-600">
-              Did PrepSense help you land an interview or job offer? Share your feedback to inspire fellow candidates!
-            </p>
-          </div>
-        </div>
-
-        {isSubmitted && (
-          <div className="p-4 rounded-2xl bg-teal-50/90 border border-teal-200 text-[#043c44] flex items-start gap-3 shadow-xs">
-            <Clock className="w-5 h-5 text-[#0d9488] shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <p className="font-semibold text-sm">Pending Review Confirmation</p>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Thank you for sharing your experience! Your story has been submitted and is currently <strong>pending review</strong>. Once approved, it will be showcased publicly on the PrepSense home page.
-              </p>
+        {/* Modal for Resume Upload Form */}
+        {showUploadForm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+            <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto bg-white rounded-3xl p-6 sm:p-8 shadow-2xl border border-teal-100 relative">
               <button
                 type="button"
-                onClick={() => setIsSubmitted(false)}
-                className="text-xs font-semibold text-[#0d9488] hover:underline pt-1 inline-block"
+                onClick={() => setShowUploadForm(false)}
+                className="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 font-bold transition-colors"
               >
-                Submit another story
+                ✕
               </button>
+              <h3 className="font-heading text-xl font-bold text-[#043c44] mb-4">
+                {targetUploadGroupId ? 'Upload New Version of Resume' : 'Upload Resume for AI Analysis'}
+              </h3>
+              <ResumeUploadForm
+                resumeGroupId={targetUploadGroupId}
+                onUploadSuccess={handleUploadSuccess}
+              />
             </div>
           </div>
         )}
 
-        {!isSubmitted && (
-          <form onSubmit={handleSubmitStory} className="space-y-4">
-            {errorMessage && (
-              <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-3">
-                <AlertCircle className="w-5 h-5 shrink-0 text-rose-500" />
-                <span>{errorMessage}</span>
+        {/* TAB 1: RESUMES */}
+        {activeTab === 'resumes' && (
+          <div className="space-y-6">
+            {isLoadingResumes ? (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <Skeleton className="h-64 rounded-3xl" />
+                <Skeleton className="h-64 rounded-3xl col-span-2" />
+              </div>
+            ) : isErrorResumes ? (
+              <ApiErrorBoundary
+                title="Failed to Load Candidate Resumes"
+                error={errorResumes}
+                onRetry={refetchResumes}
+              />
+            ) : resumesList.length === 0 ? (
+              /* Requirement (2): Encouraging Empty State for Resumes */
+              <Card className="glass-panel p-8 sm:p-12 rounded-3xl text-center space-y-4 border-dashed border-teal-200 bg-white/90 max-w-xl mx-auto shadow-xs">
+                <div className="w-14 h-14 rounded-2xl bg-teal-50 text-[#0d9488] border border-teal-200/70 flex items-center justify-center mx-auto shadow-xs">
+                  <FileText className="w-7 h-7" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="font-heading font-bold text-xl text-[#043c44]">No Resumes Uploaded Yet</h3>
+                  <p className="text-slate-600 text-xs sm:text-sm leading-relaxed max-w-md mx-auto">
+                    Upload your resume to get instant role-specific ATS scoring, section-by-section feedback, format compatibility checks, and tailored rewrite suggestions.
+                  </p>
+                </div>
+                <Button
+                  onClick={handleStartNewResumeUpload}
+                  className="px-6 py-3 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs sm:text-sm shadow-md transition-all inline-flex items-center gap-2 border border-[#043c44]"
+                >
+                  <Plus className="w-4 h-4 text-teal-300" />
+                  Upload Your First Resume
+                </Button>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Left Panel: Resume Groups / Versions List */}
+                <div className="lg:col-span-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-heading font-bold text-base text-[#043c44]">Your Resumes</h3>
+                    <span className="text-xs text-slate-500">{resumesList.length} groups</span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {resumesList.map((group) => {
+                      const isActive = activeResumeGroup?.resumeGroupId === group.resumeGroupId;
+                      const isExpanded = !!expandedVersions[group.resumeGroupId];
+
+                      return (
+                        <Card
+                          key={group.id}
+                          className={`glass-panel p-4 sm:p-5 rounded-2xl border transition-colors duration-150 cursor-pointer ${
+                            isActive
+                              ? 'border-teal-400 bg-teal-50/40 shadow-xs'
+                              : 'border-slate-200/80 bg-white/90 hover:border-teal-200'
+                          }`}
+                          onClick={() => setActiveResumeGroup(group)}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-block px-2.5 py-0.5 rounded-full bg-teal-100/80 text-[#0d9488] text-[10px] font-extrabold uppercase">
+                                  v{group.version}
+                                </span>
+                                <span className="text-xs font-semibold text-slate-500">
+                                  {group.totalVersions > 1 ? `${group.totalVersions} versions` : '1 version'}
+                                </span>
+                              </div>
+                              <h4 className="font-heading font-bold text-sm text-[#043c44] truncate">
+                                {group.targetRole || 'Software Engineer'}
+                              </h4>
+                              <p className="text-[11px] text-slate-400 flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                {new Date(group.createdAt).toLocaleDateString(undefined, {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                })}
+                              </p>
+                            </div>
+
+                            {group.aiQualityScore !== undefined && group.aiQualityScore !== null && (
+                              <div className="text-right shrink-0">
+                                <span className="text-lg font-extrabold text-[#0d9488]">
+                                  {group.aiQualityScore}
+                                </span>
+                                <span className="text-[10px] text-slate-400 block">ATS Score</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartNewVersionUpload(group.resumeGroupId);
+                              }}
+                              className="p-0 h-auto text-xs font-semibold text-[#0d9488] hover:text-[#043c44] flex items-center gap-1 bg-transparent hover:bg-transparent"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Upload v{group.version + 1}
+                            </Button>
+
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartMockInterview(group.id, group.targetRole || 'Software Engineer');
+                              }}
+                              disabled={isStartingInterview}
+                              className="p-0 h-auto text-xs font-semibold text-[#043c44] hover:text-[#0d9488] flex items-center gap-1 bg-transparent hover:bg-transparent"
+                            >
+                              <Mic className="w-3.5 h-3.5 text-[#0d9488]" />
+                              Mock Practice
+                            </Button>
+                          </div>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Right Panel: Selected Resume Detail & AI Analysis */}
+                <div className="lg:col-span-8 space-y-6">
+                  {activeResumeGroup ? (
+                    <div className="space-y-6">
+                      <Card className="glass-panel p-6 rounded-3xl border-teal-100 bg-white/90 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <FileCheck className="w-5 h-5 text-[#0d9488]" />
+                            <h3 className="font-heading font-bold text-lg text-[#043c44]">
+                              {activeResumeGroup.targetRole || 'Software Engineer'} Resume
+                            </h3>
+                          </div>
+                          <p className="text-xs text-slate-500">
+                            Version {activeResumeGroup.version} • Uploaded{' '}
+                            {new Date(activeResumeGroup.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <Button
+                            asChild
+                            variant="outline"
+                            size="sm"
+                            className="text-xs font-semibold rounded-xl border-slate-200 text-slate-700 hover:bg-slate-50"
+                          >
+                            <a href={activeResumeGroup.fileUrl} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="w-3.5 h-3.5 mr-1 text-[#0d9488]" />
+                              View Original File
+                            </a>
+                          </Button>
+
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              handleStartMockInterview(
+                                activeResumeGroup.id,
+                                activeResumeGroup.targetRole || 'Software Engineer'
+                              )
+                            }
+                            disabled={isStartingInterview}
+                            className="text-xs font-semibold rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white shadow-xs flex items-center gap-1.5"
+                          >
+                            <Mic className="w-3.5 h-3.5 text-teal-300" />
+                            Start Mock Interview
+                          </Button>
+                        </div>
+                      </Card>
+
+                      <ParsedResumeView
+                        resume={{
+                          id: activeResumeGroup.id,
+                          resumeGroupId: activeResumeGroup.resumeGroupId,
+                          fileUrl: activeResumeGroup.fileUrl,
+                          targetRole: activeResumeGroup.targetRole,
+                          version: activeResumeGroup.version,
+                          createdAt: activeResumeGroup.createdAt,
+                          parsedJson: activeResumeGroup.parsedJson,
+                        }}
+                        onReupload={handleStartNewResumeUpload}
+                      />
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 text-slate-400 text-xs">
+                      Select a resume from the left panel to inspect parsing & AI review.
+                    </div>
+                  )}
+                </div>
               </div>
             )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-700">Author Name</label>
-                <input
-                  type="text"
-                  value={authorName}
-                  onChange={(e) => setAuthorName(e.target.value)}
-                  placeholder="e.g. Aditya S."
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-xs text-[#043c44] focus:outline-none focus:ring-2 focus:ring-[#0d9488]/40 focus:border-[#0d9488]"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-700">Role Achieved</label>
-                <input
-                  type="text"
-                  value={roleAchieved}
-                  onChange={(e) => setRoleAchieved(e.target.value)}
-                  placeholder="e.g. Software Engineer @ Google"
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-xs text-[#043c44] focus:outline-none focus:ring-2 focus:ring-[#0d9488]/40 focus:border-[#0d9488]"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-700">Your Feedback / Story</label>
-              <textarea
-                rows={3}
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="Share how PrepSense resume analysis or mock interviews helped your preparation..."
-                className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white text-xs text-[#043c44] focus:outline-none focus:ring-2 focus:ring-[#0d9488]/40 focus:border-[#0d9488] resize-none"
-              />
-            </div>
-
-            <div className="flex justify-end">
-              <Button
-                type="submit"
-                disabled={isSubmitting || !content.trim()}
-                className="px-6 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-all shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44] disabled:opacity-50"
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-teal-300" />
-                    Submitting...
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4 text-teal-300" />
-                    Submit Story
-                  </>
-                )}
-              </Button>
-            </div>
-          </form>
+          </div>
         )}
-      </Card>
+
+        {/* TAB 2: INTERVIEW SESSIONS */}
+        {activeTab === 'sessions' && (
+          <div className="space-y-6">
+            {isLoadingSessions ? (
+              <div className="space-y-4">
+                <Skeleton className="h-20 w-full rounded-2xl" />
+                <Skeleton className="h-20 w-full rounded-2xl" />
+                <Skeleton className="h-20 w-full rounded-2xl" />
+              </div>
+            ) : isErrorSessions ? (
+              <ApiErrorBoundary
+                title="Failed to Load Interview Sessions"
+                error={errorSessions}
+                onRetry={refetchSessions}
+              />
+            ) : pastSessions.length === 0 ? (
+              /* Requirement (2): Encouraging Empty State for Interview Sessions */
+              <Card className="glass-panel p-8 sm:p-12 rounded-3xl text-center space-y-4 border-dashed border-teal-200 bg-white/90 max-w-xl mx-auto shadow-xs">
+                <div className="w-14 h-14 rounded-2xl bg-teal-50 text-[#10b981] border border-teal-200/70 flex items-center justify-center mx-auto shadow-xs">
+                  <Mic className="w-7 h-7" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="font-heading font-bold text-xl text-[#043c44]">No Mock Interviews Completed Yet</h3>
+                  <p className="text-slate-600 text-xs sm:text-sm leading-relaxed max-w-md mx-auto">
+                    Rehearse 5-7 field-specific interview questions out loud with AI voice guidance. Get immediate STAR feedback on structure, relevance, and specificity after each answer.
+                  </p>
+                </div>
+                {resumesList.length > 0 ? (
+                  <Button
+                    onClick={() => handleStartMockInterview(resumesList[0].id, resumesList[0].targetRole || 'Software Engineer')}
+                    className="px-6 py-3 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs sm:text-sm shadow-md transition-all inline-flex items-center gap-2 border border-[#043c44]"
+                  >
+                    <Mic className="w-4 h-4 text-teal-300" />
+                    Start First Mock Interview
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={handleStartNewResumeUpload}
+                    className="px-6 py-3 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs sm:text-sm shadow-md transition-all inline-flex items-center gap-2 border border-[#043c44]"
+                  >
+                    <Plus className="w-4 h-4 text-teal-300" />
+                    Upload Resume to Unlock Practice
+                  </Button>
+                )}
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-heading font-bold text-lg text-[#043c44]">Past Voice Interview Sessions</h3>
+                  <span className="text-xs text-slate-500">{pastSessions.length} total sessions</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {pastSessions.map((s) => (
+                    <Card
+                      key={s.id}
+                      className="glass-panel p-5 rounded-2xl border border-slate-200/80 bg-white/90 hover:border-teal-200 transition-colors duration-150 flex flex-col justify-between space-y-4 shadow-xs min-h-[140px]"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="inline-block text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60">
+                            {s.targetRole}
+                          </span>
+                          <span
+                            className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
+                              s.status === 'completed'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {s.status === 'completed' ? 'Completed' : 'In Progress'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1">
+                          <div>
+                            <p className="text-xs text-slate-400 flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {new Date(s.createdAt).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                              })}
+                            </p>
+                          </div>
+
+                          {s.overallScore !== null && (
+                            <div className="text-right">
+                              <span className="text-xl font-extrabold text-[#0d9488]">{s.overallScore}</span>
+                              <span className="text-[10px] text-slate-400 block">Overall Score</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                        <span className="text-xs text-slate-500">
+                          {s.questionsCount || 5} questions total
+                        </span>
+
+                        <Button
+                          asChild
+                          variant="ghost"
+                          size="sm"
+                          className="p-0 h-auto text-xs font-semibold text-[#043c44] hover:text-[#0d9488] flex items-center gap-1.5 bg-transparent hover:bg-transparent"
+                        >
+                          <button type="button" onClick={() => navigate(`/interview/${s.id}`)}>
+                            {s.status === 'completed' ? 'View Results & Report' : 'Resume Practice'}
+                            <ArrowRight className="w-3.5 h-3.5 text-[#0d9488]" />
+                          </button>
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: SHARE SUCCESS STORY */}
+        {activeTab === 'community' && (
+          <div className="max-w-2xl mx-auto space-y-6">
+            <Card className="glass-panel p-6 sm:p-8 rounded-3xl border-teal-100 bg-white/90 shadow-sm space-y-6">
+              <div className="space-y-2">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60 text-xs font-semibold">
+                  <MessageSquarePlus className="w-3.5 h-3.5" />
+                  Community Success Stories
+                </div>
+                <h3 className="font-heading font-bold text-2xl text-[#043c44]">Share Your Candidate Journey</h3>
+                <p className="text-slate-600 text-xs sm:text-sm leading-relaxed">
+                  Landed an interview offer or improved your speaking confidence using PrepSense? Submit your story below to inspire other job seekers.
+                </p>
+              </div>
+
+              {isStorySubmitted ? (
+                <div className="p-6 rounded-2xl bg-emerald-50 border border-emerald-200 text-center space-y-2">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
+                  <h4 className="font-heading font-bold text-lg text-emerald-900">Story Submitted Successfully!</h4>
+                  <p className="text-xs text-emerald-700 leading-relaxed">
+                    Thank you for sharing your experience! Your story will be visible to the PrepSense community.
+                  </p>
+                  <Button
+                    type="button"
+                    onClick={() => setIsStorySubmitted(false)}
+                    variant="outline"
+                    className="mt-3 text-xs font-semibold border-emerald-300 text-emerald-800"
+                  >
+                    Submit Another Story
+                  </Button>
+                </div>
+              ) : (
+                <form onSubmit={handleSubmitStory} className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-[#043c44]">Your Name</label>
+                      <input
+                        type="text"
+                        value={authorName}
+                        onChange={(e) => setAuthorName(e.target.value)}
+                        placeholder="e.g. Alex Rivera"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-teal-400 focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-[#043c44]">Role Achieved / Target</label>
+                      <input
+                        type="text"
+                        value={roleAchieved}
+                        onChange={(e) => setRoleAchieved(e.target.value)}
+                        placeholder="e.g. Associate Product Manager at Stripe"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-teal-400 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-[#043c44]">Your Story or Feedback</label>
+                    <textarea
+                      value={content}
+                      onChange={(e) => setContent(e.target.value)}
+                      rows={4}
+                      placeholder="Share how AI resume feedback or voice mock sessions helped you prepare..."
+                      className="w-full p-3.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-teal-400 focus:outline-none resize-none"
+                    />
+                    <div className="flex justify-between text-[11px] text-slate-400">
+                      <span>Max 500 characters</span>
+                      <span>{content.length}/500</span>
+                    </div>
+                  </div>
+
+                  {storyErrorMessage && (
+                    <div className="p-3 rounded-xl bg-red-50 text-red-700 text-xs border border-red-200">
+                      {storyErrorMessage}
+                    </div>
+                  )}
+
+                  <Button
+                    type="submit"
+                    disabled={isSubmittingStory}
+                    className="w-full py-3 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs shadow-md transition-colors flex items-center justify-center gap-2 border border-[#043c44]"
+                  >
+                    {isSubmittingStory ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-teal-300" /> Submitting Story...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 text-teal-300" /> Share Your Story
+                      </>
+                    )}
+                  </Button>
+                </form>
+              )}
+            </Card>
+
+            {/* List of existing stories */}
+            <div className="space-y-4">
+              <h4 className="font-heading font-bold text-base text-[#043c44]">Recent Community Stories</h4>
+              {isLoadingStories ? (
+                <Skeleton className="h-24 w-full rounded-2xl" />
+              ) : successStories.length === 0 ? (
+                /* Requirement (2): Encouraging Empty State for Success Stories */
+                <Card className="p-6 rounded-2xl text-center space-y-2 border-dashed border-teal-200 bg-white/80">
+                  <Sparkles className="w-6 h-6 text-teal-400 mx-auto" />
+                  <p className="font-semibold text-xs text-slate-700">Be the first candidate to share your story!</p>
+                  <p className="text-[11px] text-slate-500">Your feedback helps inspire other job candidates.</p>
+                </Card>
+              ) : (
+                <div className="space-y-3">
+                  {successStories.map((story) => (
+                    <Card key={story.id} className="p-4 rounded-2xl border border-slate-200/80 bg-white/90 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-bold text-[#043c44]">{story.authorName}</p>
+                          {story.roleAchieved && (
+                            <span className="text-[11px] text-[#0d9488] font-semibold">{story.roleAchieved}</span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(story.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed">"{story.content}"</p>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

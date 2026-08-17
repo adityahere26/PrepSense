@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { prisma } from '../db.js';
 import { authenticateJWT } from '../middleware/auth.js';
+import { interviewCreationLimiter, transcriptionLimiter } from '../middleware/rateLimiter.js';
 import {
   generateInterviewQuestionsWithGemini,
   generateQuestionTTSWithGemini,
@@ -127,8 +128,8 @@ const createSessionHandler = async (req: Request, res: Response) => {
   }
 };
 
-router.post('/session', authenticateJWT, createSessionHandler);
-router.post('/sessions', authenticateJWT, createSessionHandler);
+router.post('/session', authenticateJWT, interviewCreationLimiter, createSessionHandler);
+router.post('/sessions', authenticateJWT, interviewCreationLimiter, createSessionHandler);
 
 /**
  * GET /api/interview/session/:id
@@ -435,7 +436,7 @@ router.get('/question/:questionId/tts', authenticateJWT, async (req: Request, re
  * Accepts spoken audio answer via multipart/form-data.
  * Saves raw audio, records/upserts InterviewAnswer, and returns next question or completion signal.
  */
-router.post('/session/:sessionId/answer', authenticateJWT, (req: Request, res: Response) => {
+router.post('/session/:sessionId/answer', authenticateJWT, transcriptionLimiter, (req: Request, res: Response) => {
   uploadAnswerAudio.single('audio')(req, res, async (err: any) => {
     if (err) {
       const message = err instanceof multer.MulterError ? `Audio upload error: ${err.message}` : err.message;
@@ -546,7 +547,7 @@ router.post('/session/:sessionId/answer', authenticateJWT, (req: Request, res: R
  * Accepts JSON: { audioData: string, mimeType?: string }
  * Returns: { text: string }
  */
-router.post('/transcribe-chunk', async (req: Request, res: Response) => {
+router.post('/transcribe-chunk', transcriptionLimiter, async (req: Request, res: Response) => {
   try {
     const { audioData, mimeType } = req.body || {};
 

@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ApiErrorBoundary } from '../components/ApiErrorBoundary';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -650,23 +652,44 @@ export const InterviewSession: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-[80vh] flex flex-col items-center justify-center p-6 text-center text-slate-100">
-        <Loader2 className="w-12 h-12 text-teal-400 animate-spin mb-4" />
-        <h2 className="text-xl font-medium">Preparing Live Interview Session...</h2>
-        <p className="text-sm text-slate-400 mt-2">Loading session questions & target role profile</p>
+      <div className="max-w-4xl mx-auto my-8 px-4 sm:px-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-9 w-36 rounded-xl" />
+          <Skeleton className="h-8 w-44 rounded-full" />
+        </div>
+        <Card className="glass-panel p-8 rounded-3xl space-y-6 bg-white/90 border-teal-100">
+          <div className="space-y-3">
+            <Skeleton className="h-6 w-48 rounded-md" />
+            <Skeleton className="h-8 w-full rounded-xl" />
+          </div>
+          <Skeleton className="h-64 w-full rounded-2xl" />
+          <div className="flex justify-center">
+            <Skeleton className="h-12 w-48 rounded-xl" />
+          </div>
+        </Card>
       </div>
     );
   }
 
   if (errorMessage && connectionStatus === 'disconnected') {
     return (
-      <div className="max-w-xl mx-auto my-12 p-6 bg-slate-900/90 border border-slate-800 rounded-2xl text-center text-white">
-        <AlertCircle className="w-12 h-12 text-rose-400 mx-auto mb-4" />
-        <h2 className="text-xl font-bold">Live Session Error</h2>
-        <p className="text-slate-400 my-4">{errorMessage}</p>
-        <Button onClick={() => navigate('/dashboard')} className="bg-slate-800 hover:bg-slate-700">
-          <ArrowLeft className="w-4 h-4 mr-2" /> Return to Dashboard
-        </Button>
+      <div className="max-w-xl mx-auto my-12 px-4">
+        <ApiErrorBoundary
+          title="Interview Session Connection Error"
+          description="Failed to initialize or connect to the voice interview session."
+          error={errorMessage}
+          onRetry={fetchSessionDetails}
+        />
+        <div className="text-center mt-4">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => navigate('/dashboard')}
+            className="text-xs text-slate-500 hover:text-slate-700"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 mr-1.5" /> Return to Dashboard
+          </Button>
+        </div>
       </div>
     );
   }
@@ -783,7 +806,7 @@ export const InterviewSession: React.FC = () => {
               {transcripts.map((t) => (
                 <div key={t.id} className="space-y-2">
                   <div
-                    className={`p-3.5 rounded-xl border transition-all ${
+                    className={`p-3.5 rounded-xl border transition-colors duration-150 ${
                       t.sender === 'assistant'
                         ? 'bg-teal-950/30 border-teal-800/40 text-teal-100'
                         : 'bg-cyan-950/30 border-cyan-800/40 text-cyan-100'

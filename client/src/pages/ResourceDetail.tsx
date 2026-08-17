@@ -1,9 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Clock, Sparkles, BookOpen, Share2 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowLeft, Clock, Sparkles } from 'lucide-react';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ApiErrorBoundary } from '../components/ApiErrorBoundary';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -21,57 +24,61 @@ export const ResourceDetail: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
 
-  const [resource, setResource] = useState<ResourceDetailData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const fetchDetail = async () => {
-      if (!slug) return;
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/resources/${slug}`);
-        const data = await response.json();
-
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || 'Resource article not found');
-        }
-
-        setResource(data.resource);
-      } catch (err: any) {
-        setError(err.message || 'Failed to load article');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchDetail();
-  }, [slug]);
+  const {
+    data: resource,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery<ResourceDetailData | null>({
+    queryKey: ['resourceDetail', slug],
+    queryFn: async () => {
+      if (!slug) return null;
+      const response = await fetch(`${API_BASE_URL}/api/resources/${slug}`);
+      if (!response.ok) throw new Error('Resource article not found');
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Failed to load article');
+      return data.resource || null;
+    },
+    enabled: !!slug,
+  });
 
   if (isLoading) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-20 text-center text-slate-400 text-sm">
-        Loading article details...
+      <div className="max-w-4xl mx-auto px-4 py-10 sm:py-16 space-y-6">
+        <Skeleton className="h-6 w-32 rounded-lg" />
+        <Card className="p-8 rounded-3xl space-y-6 bg-white/90 border-teal-100">
+          <Skeleton className="h-10 w-3/4 rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-2xl" />
+          <Skeleton className="h-96 w-full rounded-2xl" />
+        </Card>
       </div>
     );
   }
 
-  if (error || !resource) {
+  if (isError || !resource) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-20 text-center space-y-4">
-        <h2 className="font-heading font-bold text-2xl text-[#043c44]">Article Not Found</h2>
-        <p className="text-slate-600 text-sm">{error || "The guide you are looking for doesn't exist."}</p>
-        <Button
-          onClick={() => navigate('/resources')}
-          className="px-4 py-2 h-auto bg-[#043c44] text-white rounded-xl"
-        >
-          Back to Resources
-        </Button>
+      <div className="max-w-xl mx-auto my-16 px-4">
+        <ApiErrorBoundary
+          title="Article Not Found"
+          description="The preparation guide you are looking for doesn't exist or could not be loaded."
+          error={error}
+          onRetry={refetch}
+        />
+        <div className="text-center mt-4">
+          <Button
+            onClick={() => navigate('/resources')}
+            className="px-4 py-2 h-auto bg-[#043c44] text-white rounded-xl text-xs font-semibold"
+          >
+            Back to Resources
+          </Button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-10 sm:py-16 space-y-8">
+    <div className="max-w-4xl mx-auto px-4 py-10 sm:py-16 space-y-8 animate-in fade-in duration-300">
       {/* Top Back Navigation */}
       <div>
         <Link
@@ -128,7 +135,7 @@ export const ResourceDetail: React.FC = () => {
 
           <Button
             asChild
-            className="px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-all shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44]"
+            className="px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-colors shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44]"
           >
             <Link to="/dashboard">
               <Sparkles className="w-3.5 h-3.5 text-teal-300" />

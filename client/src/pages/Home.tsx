@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
 import { Sparkles, FileText, Mic, BarChart3, ArrowRight, Quote, Trophy, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -18,8 +20,16 @@ interface SuccessStory {
 export const Home: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
-  const [stories, setStories] = useState<SuccessStory[]>([]);
-  const [isLoadingStories, setIsLoadingStories] = useState(true);
+
+  const { data: stories = [], isLoading: isLoadingStories } = useQuery<SuccessStory[]>({
+    queryKey: ['successStories'],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/api/success-stories`);
+      if (!response.ok) throw new Error('Failed to load success stories');
+      const data = await response.json();
+      return data.stories || [];
+    },
+  });
 
   useEffect(() => {
     if (location.hash === '#success-stories') {
@@ -30,29 +40,10 @@ export const Home: React.FC = () => {
     }
   }, [location]);
 
-  useEffect(() => {
-    const fetchStories = async () => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/success-stories`);
-        const data = await response.json();
-        if (response.ok && data.success) {
-          setStories(data.stories || []);
-        }
-      } catch (err) {
-        console.error('Failed to fetch success stories:', err);
-      } finally {
-        setIsLoadingStories(false);
-      }
-    };
-
-    fetchStories();
-  }, []);
-
   return (
-    <div className="max-w-6xl mx-auto px-4 py-16 sm:py-24 space-y-24">
+    <div className="max-w-6xl mx-auto px-4 py-16 sm:py-24 space-y-24 animate-in fade-in duration-300">
       {/* Hero Section */}
       <div className="text-center space-y-6 max-w-3xl mx-auto">
-        {/* Dual-tone pill badge matching reference screenshot badge */}
         <div className="inline-flex items-center rounded-full p-1 bg-teal-50/90 border border-teal-200/70 shadow-xs">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0d9488] text-white text-xs font-semibold">
             <Sparkles className="w-3.5 h-3.5 text-teal-200" />
@@ -71,7 +62,7 @@ export const Home: React.FC = () => {
           Interview Prep
         </h1>
 
-        <p className="text-slate-600 text-lg leading-relaxed max-w-2xl mx-auto">
+        <p className="text-slate-600 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto">
           Upload your resume, set your target field, get actionable ATS score analysis, and rehearse with tailored voice mock interviews.
         </p>
 
@@ -79,7 +70,7 @@ export const Home: React.FC = () => {
           {user ? (
             <Button
               asChild
-              className="w-full sm:w-auto px-6 py-3.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold shadow-md shadow-[#043c44]/20 transition-all flex items-center justify-center gap-3 border border-[#043c44]"
+              className="w-full sm:w-auto px-6 py-3.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold shadow-md shadow-[#043c44]/20 transition-colors flex items-center justify-center gap-3 border border-[#043c44]"
             >
               <Link to="/dashboard">
                 Go to Dashboard
@@ -91,7 +82,7 @@ export const Home: React.FC = () => {
           ) : (
             <Button
               asChild
-              className="w-full sm:w-auto px-6 py-3.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold shadow-md shadow-[#043c44]/20 transition-all flex items-center justify-center gap-3 border border-[#043c44]"
+              className="w-full sm:w-auto px-6 py-3.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold shadow-md shadow-[#043c44]/20 transition-colors flex items-center justify-center gap-3 border border-[#043c44]"
             >
               <Link to="/login">
                 Get Started with Google
@@ -149,30 +140,32 @@ export const Home: React.FC = () => {
           </CardHeader>
           <CardContent className="p-0">
             <CardDescription className="text-slate-600 text-sm leading-relaxed">
-              Track STAR-structure evaluation scores and filler-word trends over multiple sessions to measure real improvement.
+              Track improvement across sessions with score trend charts and aggregated recurring weak area analytics.
             </CardDescription>
           </CardContent>
         </Card>
       </div>
 
       {/* Success Stories Section */}
-      <div id="success-stories" className="space-y-10 pt-6">
+      <div id="success-stories" className="space-y-8 scroll-mt-24">
         <div className="text-center space-y-3 max-w-2xl mx-auto">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60 text-xs font-semibold uppercase tracking-wider">
             <Trophy className="w-3.5 h-3.5" />
-            Community Proof
-          </div>
-          <h2 className="font-heading text-3xl font-extrabold text-[#043c44]">
             Candidate Success Stories
+          </div>
+          <h2 className="font-heading text-3xl sm:text-4xl font-extrabold text-[#043c44]">
+            Hear From Candidates Who Prepped With Us
           </h2>
-          <p className="text-slate-600 text-sm leading-relaxed">
-            Real feedback from job seekers who prepared with PrepSense to land interviews and job offers.
+          <p className="text-slate-600 text-sm sm:text-base">
+            Real stories from candidates who used PrepSense to polish their resumes and ace their interviews.
           </p>
         </div>
 
         {isLoadingStories ? (
-          <div className="text-center py-12 text-slate-400 text-sm">
-            Loading success stories...
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Skeleton className="h-48 rounded-2xl" />
+            <Skeleton className="h-48 rounded-2xl" />
+            <Skeleton className="h-48 rounded-2xl" />
           </div>
         ) : stories.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -207,7 +200,6 @@ export const Home: React.FC = () => {
             ))}
           </div>
         ) : (
-          /* Encouraging Empty State */
           <Card className="glass-panel p-10 rounded-3xl text-center border-dashed border-teal-200 bg-white/90 shadow-xs max-w-xl mx-auto space-y-4">
             <div className="w-12 h-12 rounded-2xl bg-teal-50 text-[#0d9488] border border-teal-200/60 flex items-center justify-center mx-auto">
               <Trophy className="w-6 h-6" />
@@ -237,5 +229,3 @@ export const Home: React.FC = () => {
     </div>
   );
 };
-
-

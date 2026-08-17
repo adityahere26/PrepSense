@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Sparkles,
   Target,
@@ -15,16 +16,15 @@ import {
   Award,
   AlertCircle,
   Wand2,
-  ArrowRight,
   XCircle,
-  HelpCircle,
   FileCheck,
-  Info,
   ShieldCheck,
   ShieldAlert,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ApiErrorBoundary } from './ApiErrorBoundary';
 import { useAuth } from '../context/AuthContext';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -79,65 +79,41 @@ interface ResumeAnalysisViewProps {
 
 export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId, targetRole }) => {
   const { token } = useAuth();
+  const queryClient = useQueryClient();
 
-  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [jdText, setJdText] = useState<string>('');
   const [isJdExpanded, setIsJdExpanded] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-
-  // Accordion state for section feedback
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    fetchLatestAnalysis();
-  }, [resumeId, token]);
-
-  const fetchLatestAnalysis = async () => {
-    if (!token || !resumeId) return;
-    setIsLoading(true);
-    setErrorMessage(null);
-
-    try {
+  // 1. TanStack Query: Fetch Latest Analysis
+  const {
+    data: analysis,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery<AnalysisData | null>({
+    queryKey: ['resumeAnalysis', resumeId, token],
+    queryFn: async () => {
+      if (!token || !resumeId) return null;
       const response = await fetch(`${API_BASE_URL}/api/resume/${resumeId}/analysis/latest`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-
+      if (!response.ok) throw new Error('Failed to load resume analysis data');
       const data = await response.json();
-
-      if (response.ok && data.success && data.analysis) {
-        setAnalysis(data.analysis);
-        if (data.analysis.jdText) {
-          setJdText(data.analysis.jdText);
-        }
-        // Open all sections by default for easy reading
-        if (data.analysis.feedbackJson?.sectionFeedback) {
-          const initialOpen: Record<string, boolean> = {};
-          data.analysis.feedbackJson.sectionFeedback.forEach((sec: SectionFeedbackItem, idx: number) => {
-            initialOpen[sec.section || `sec-${idx}`] = true;
-          });
-          setOpenSections(initialOpen);
-        }
+      if (!data.success) throw new Error(data.error || 'Failed to fetch analysis');
+      if (data.analysis?.jdText) {
+        setJdText(data.analysis.jdText);
       }
-    } catch (err) {
-      console.error('Failed to fetch resume analysis:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      return data.analysis || null;
+    },
+    enabled: !!token && !!resumeId,
+  });
 
-  const handleRunAnalysis = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!token || !resumeId) return;
-
-    setIsAnalyzing(true);
-    setErrorMessage(null);
-
-    try {
+  // 2. TanStack Mutation: Run / Re-run Resume Audit
+  const analyzeMutation = useMutation({
+    mutationFn: async (targetJdText?: string) => {
       const response = await fetch(`${API_BASE_URL}/api/resume/${resumeId}/analyze`, {
         method: 'POST',
         headers: {
@@ -145,41 +121,31 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          jdText: jdText.trim() || undefined,
+          jdText: targetJdText?.trim() || undefined,
         }),
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to analyze resume');
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'An error occurred during resume analysis');
       }
+      return data.analysis as AnalysisData;
+    },
+    onSuccess: (newAnalysis) => {
+      queryClient.setQueryData(['resumeAnalysis', resumeId, token], newAnalysis);
+      setIsJdExpanded(false);
+    },
+  });
 
-      if (data.success && data.analysis) {
-        setAnalysis(data.analysis);
-        setIsJdExpanded(false);
-
-        // Open section accordions by default
-        if (data.analysis.feedbackJson?.sectionFeedback) {
-          const initialOpen: Record<string, boolean> = {};
-          data.analysis.feedbackJson.sectionFeedback.forEach((sec: SectionFeedbackItem, idx: number) => {
-            initialOpen[sec.section || `sec-${idx}`] = true;
-          });
-          setOpenSections(initialOpen);
-        }
-      }
-    } catch (err: any) {
-      console.error('Analysis error:', err);
-      setErrorMessage(err.message || 'An error occurred during resume analysis. Please try again.');
-    } finally {
-      setIsAnalyzing(false);
-    }
+  const handleRunAnalysis = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!token || !resumeId) return;
+    analyzeMutation.mutate(jdText);
   };
 
   const toggleSection = (sectionName: string) => {
     setOpenSections((prev) => ({
       ...prev,
-      [sectionName]: !prev[sectionName],
+      [sectionName]: prev[sectionName] === false ? true : false,
     }));
   };
 
@@ -202,25 +168,25 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
     switch (status) {
       case 'strong':
         return (
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1 shrink-0">
             <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Strong
           </span>
         );
       case 'good':
         return (
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-teal-100 text-teal-800 border border-teal-200 flex items-center gap-1">
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-teal-100 text-teal-800 border border-teal-200 flex items-center gap-1 shrink-0">
             <CheckCircle2 className="w-3 h-3 text-teal-600" /> Good
           </span>
         );
       case 'needs_improvement':
         return (
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1 shrink-0">
             <AlertTriangle className="w-3 h-3 text-amber-600" /> Needs Work
           </span>
         );
       case 'critical':
         return (
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1 shrink-0">
             <AlertCircle className="w-3 h-3 text-rose-600" /> Action Required
           </span>
         );
@@ -232,6 +198,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
   const feedbackData = analysis?.feedbackJson;
   const formatChecks = analysis?.formatCompatibility || [];
   const aiQualityScore = analysis?.aiQualityScore ?? feedbackData?.aiQualityScore ?? 70;
+  const isAnalyzing = analyzeMutation.isPending;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
@@ -263,14 +230,23 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
               {isJdExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </Button>
 
-            {!analysis && !isAnalyzing && (
+            {(!analysis || isJdExpanded) && (
               <Button
                 onClick={() => handleRunAnalysis()}
                 disabled={isAnalyzing}
-                className="px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-all shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44]"
+                className="px-5 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-colors shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44]"
               >
-                <Wand2 className="w-4 h-4 text-teal-300" />
-                Run Full Audit
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-teal-300" />
+                    Running Audit...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-4 h-4 text-teal-300" />
+                    Run Full Audit
+                  </>
+                )}
               </Button>
             )}
           </div>
@@ -288,7 +264,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                 rows={4}
                 value={jdText}
                 onChange={(e) => setJdText(e.target.value)}
-                placeholder="Paste the full job description or key responsibilities here... (e.g. We are looking for a Software Engineer with expertise in React, Node.js, AWS, and CI/CD pipelines...)"
+                placeholder="Paste the target job description or key responsibilities here for match scoring..."
                 className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white text-sm text-[#043c44] focus:outline-none focus:ring-2 focus:ring-[#0d9488]/40 focus:border-[#0d9488] resize-none shadow-xs"
               />
             </div>
@@ -307,7 +283,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
               <Button
                 type="submit"
                 disabled={isAnalyzing}
-                className="px-6 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-all shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44] disabled:opacity-50"
+                className="px-6 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-colors shadow-md shadow-[#043c44]/20 flex items-center gap-2 border border-[#043c44] disabled:opacity-50"
               >
                 {isAnalyzing ? (
                   <>
@@ -325,37 +301,35 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
           </form>
         )}
 
-        {errorMessage && (
+        {analyzeMutation.isError && (
           <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-3">
             <AlertCircle className="w-5 h-5 shrink-0 text-rose-500" />
-            <span>{errorMessage}</span>
+            <span>{(analyzeMutation.error as Error)?.message || 'An error occurred during analysis.'}</span>
           </div>
         )}
       </Card>
 
-      {/* Loading state */}
-      {isLoading ? (
-        <Card className="glass-panel p-12 rounded-3xl text-center space-y-3 border-teal-100 bg-white/90 shadow-xs">
-          <Loader2 className="w-8 h-8 text-[#0d9488] animate-spin mx-auto" />
-          <p className="text-sm font-semibold text-[#043c44]">Fetching latest resume analysis...</p>
-        </Card>
-      ) : isAnalyzing ? (
-        <Card className="glass-panel p-12 rounded-3xl text-center space-y-4 border-teal-100 bg-white/90 shadow-xs animate-pulse">
-          <div className="w-12 h-12 rounded-2xl bg-teal-100 flex items-center justify-center mx-auto text-[#0d9488]">
-            <Wand2 className="w-6 h-6 animate-spin" />
+      {/* Loading Skeleton state */}
+      {isLoading || isAnalyzing ? (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Skeleton className="h-56 rounded-3xl" />
+            <Skeleton className="h-56 rounded-3xl" />
           </div>
-          <div className="space-y-1">
-            <h3 className="text-lg font-bold text-[#043c44]">Running Full Resume Audit</h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Executing Gemini AI content evaluation and rule-based format compatibility checks (scanned PDF, images, tables, multi-column)...
-            </p>
-          </div>
-        </Card>
+          <Skeleton className="h-44 rounded-3xl" />
+          <Skeleton className="h-64 rounded-3xl" />
+        </div>
+      ) : isError ? (
+        <ApiErrorBoundary
+          title="Failed to Load Resume Analysis"
+          error={error}
+          onRetry={refetch}
+        />
       ) : feedbackData ? (
         <div className="space-y-8">
           {/* Top Score Cards Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Card 1: AI Content Quality Score (Renamed from ATS Compatibility Score) */}
+            {/* Card 1: AI Content Quality Score */}
             <Card className="glass-panel p-6 sm:p-8 rounded-3xl border-teal-100 bg-white/95 shadow-sm space-y-4 relative overflow-hidden flex flex-col justify-between">
               <div className="space-y-3 relative z-10">
                 <div className="flex items-center justify-between">
@@ -365,21 +339,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                         <Award className="w-4 h-4 text-[#0d9488]" />
                         AI Content Quality Score
                       </span>
-                      {feedbackData?.source === 'ai' ? (
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[10px] font-bold flex items-center gap-1">
-                          <Sparkles className="w-3 h-3 text-emerald-600" />
-                          Real AI {feedbackData.modelUsed ? `(${feedbackData.modelUsed})` : ''}
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200/80 text-[10px] font-bold flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3 text-amber-600" />
-                          Rule Fallback
-                        </span>
-                      )}
                     </div>
-                    <span className="text-[10px] text-slate-400 font-medium">
-                      Gemini's subjective content/keyword assessment
-                    </span>
                   </div>
                   <span className={`px-3 py-1 rounded-full border text-sm font-black ${getScoreColorClass(aiQualityScore)}`}>
                     {aiQualityScore} / 100
@@ -387,7 +347,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                 </div>
 
                 <div className="flex items-baseline gap-2">
-                  <h3 className="font-heading text-2xl sm:text-3xl font-extrabold text-[#043c44]">
+                  <h3 className="font-heading text-xl sm:text-2xl font-extrabold text-[#043c44]">
                     {aiQualityScore >= 80
                       ? 'High Quality Content'
                       : aiQualityScore >= 65
@@ -405,7 +365,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
               <div className="space-y-1.5 pt-2 relative z-10">
                 <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
                   <div
-                    className={`h-full transition-all duration-500 rounded-full ${
+                    className={`h-full transition-[width] duration-500 rounded-full ${
                       aiQualityScore >= 80
                         ? 'bg-emerald-500'
                         : aiQualityScore >= 65
@@ -440,7 +400,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
 
                 {feedbackData.matchScore !== null && feedbackData.matchScore !== undefined ? (
                   <>
-                    <h3 className="font-heading text-2xl sm:text-3xl font-extrabold text-[#043c44]">
+                    <h3 className="font-heading text-xl sm:text-2xl font-extrabold text-[#043c44]">
                       {feedbackData.matchScore >= 80
                         ? 'Strong Role Alignment'
                         : feedbackData.matchScore >= 65
@@ -448,107 +408,72 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                         : 'Partial Skill Match'}
                     </h3>
                     <p className="text-xs text-slate-600 leading-relaxed">
-                      {feedbackData.jdReasoning || 'Evaluated skill and experience overlaps against target role requirements.'}
+                      {feedbackData.jdReasoning || 'Match percentage evaluated based on skills and experience provided in the JD.'}
                     </p>
                   </>
                 ) : (
-                  <>
-                    <h3 className="font-heading text-xl font-bold text-[#043c44]">
-                      Paste a Job Description for Custom Match
-                    </h3>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      Add a target Job Description above to calculate your exact keyword match score, missing skills gap analysis, and tailored recommendations.
+                  <div className="py-2 space-y-1">
+                    <h3 className="font-heading text-lg font-bold text-[#043c44]">Optional JD Match Scoring</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Paste a specific job description above to calculate exact skill match percentage and identify missing keywords.
                     </p>
-                  </>
+                  </div>
                 )}
               </div>
 
-              {/* Progress Bar or CTA */}
-              <div className="space-y-1.5 pt-2 relative z-10">
-                {feedbackData.matchScore !== null && feedbackData.matchScore !== undefined ? (
+              {feedbackData.matchScore !== null && feedbackData.matchScore !== undefined && (
+                <div className="space-y-1.5 pt-2 relative z-10">
                   <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
                     <div
-                      className="h-full transition-all duration-500 rounded-full bg-cyan-500"
+                      className={`h-full transition-[width] duration-500 rounded-full ${
+                        feedbackData.matchScore >= 80
+                          ? 'bg-emerald-500'
+                          : feedbackData.matchScore >= 65
+                          ? 'bg-[#0891b2]'
+                          : 'bg-amber-500'
+                      }`}
                       style={{ width: `${feedbackData.matchScore}%` }}
                     />
                   </div>
-                ) : (
-                  <Button
-                    onClick={() => setIsJdExpanded(true)}
-                    variant="outline"
-                    className="w-full py-2 h-auto text-xs font-semibold border-cyan-200 text-[#0891b2] hover:bg-cyan-50 rounded-xl"
-                  >
-                    + Add Job Description
-                  </Button>
-                )}
-              </div>
+                  <span className="text-[10px] text-slate-400 font-medium">Keywords & experience alignment score</span>
+                </div>
+              )}
             </Card>
           </div>
 
-          {/* NEW SECTION: Deterministic Format Compatibility Check */}
-          {formatChecks && formatChecks.length > 0 && (
-            <Card className="glass-panel p-6 sm:p-8 rounded-3xl border-teal-100 bg-white/95 shadow-sm space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-[#043c44] font-heading font-bold text-xl">
+          {/* Format Compatibility Checklist */}
+          {formatChecks.length > 0 && (
+            <Card className="glass-panel p-6 sm:p-8 rounded-3xl border-teal-100 bg-white/95 shadow-sm space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2 text-[#043c44] font-heading font-bold text-lg">
                     <FileCheck className="w-5 h-5 text-[#0d9488]" />
-                    <h3>Format Compatibility Check</h3>
+                    <h3>Deterministic Format Compatibility Checks</h3>
                   </div>
                   <p className="text-xs text-slate-500">
-                    Rule-based technical file audit inspecting scanned text density, images, tables, layout columns, and core sections.
+                    Rule-based verification for scanned PDFs, missing sections, multi-column layouts, tables, and images.
                   </p>
                 </div>
-                <span className="inline-flex items-center px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold self-start sm:self-auto">
-                  {formatChecks.filter((c) => c.passed).length} / {formatChecks.length} Checks Passed
-                </span>
               </div>
 
-              {/* Prominent Rule-Based Disclaimer Note */}
-              <div className="p-4 rounded-2xl bg-amber-50/80 border border-amber-200/80 text-amber-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                <div className="flex items-center gap-2.5 font-medium">
-                  <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
-                  <span><strong>Note:</strong> These are rule-based checks, not AI-generated.</span>
-                </div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100/90 px-2.5 py-1 rounded-lg shrink-0">
-                  Deterministic File Inspection
-                </span>
-              </div>
-
-              {/* Grid of Rule Checks */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {formatChecks.map((item, idx) => (
                   <div
                     key={idx}
-                    className={`p-4 rounded-2xl border transition-all space-y-2 flex flex-col justify-between ${
+                    className={`p-3.5 rounded-2xl border flex items-start gap-3 transition-colors duration-150 ${
                       item.passed
-                        ? 'bg-emerald-50/30 border-emerald-200/80 hover:border-emerald-300'
-                        : 'bg-rose-50/40 border-rose-200/80 hover:border-rose-300'
+                        ? 'bg-emerald-50/50 border-emerald-200/80 text-emerald-950'
+                        : 'bg-rose-50/50 border-rose-200/80 text-rose-950'
                     }`}
                   >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <h4 className="font-bold text-xs sm:text-sm text-[#043c44] flex items-center gap-1.5">
-                          {item.passed ? (
-                            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                          ) : (
-                            <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0" />
-                          )}
-                          {item.check}
-                        </h4>
-                        <span
-                          className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
-                            item.passed
-                              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                              : 'bg-rose-100 text-rose-800 border-rose-200'
-                          }`}
-                        >
-                          {item.passed ? 'PASS' : 'FAIL'}
-                        </span>
-                      </div>
-
-                      <p className="text-xs text-slate-600 leading-relaxed pt-1">
-                        {item.message}
-                      </p>
+                    {item.passed ? (
+                      <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+                    )}
+                    <div className="space-y-0.5 min-w-0">
+                      <p className="text-xs font-bold">{item.check}</p>
+                      <p className="text-[11px] opacity-80 leading-relaxed">{item.message}</p>
                     </div>
                   </div>
                 ))}
@@ -579,7 +504,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                     <h3>Bullet-Point Rewrite Suggestions</h3>
                   </div>
                   <p className="text-xs text-slate-500">
-                    High-impact before/after revisions phrased for top {targetRole || 'field'} resume standards.
+                    High-impact before/after revisions phrased for top {targetRole || 'field'} standards.
                   </p>
                 </div>
                 <span className="inline-flex items-center px-3 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200 text-xs font-bold self-start sm:self-auto">
@@ -591,7 +516,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                 {feedbackData.rewriteSuggestions.map((item, idx) => (
                   <div
                     key={idx}
-                    className="p-5 sm:p-6 rounded-2xl border border-slate-200/90 bg-white shadow-xs space-y-4 transition-all hover:border-teal-300"
+                    className="p-4 sm:p-6 rounded-2xl border border-slate-200/90 bg-white shadow-xs space-y-4 transition-colors duration-150 hover:border-teal-300"
                   >
                     {item.section && (
                       <div className="inline-block px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[11px]">
@@ -599,6 +524,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                       </div>
                     )}
 
+                    {/* Responsive stacked comparison on mobile, side-by-side on desktop */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Before / Original */}
                       <div className="p-4 rounded-xl bg-rose-50/70 border border-rose-200/80 space-y-2">
@@ -674,7 +600,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                   return (
                     <div
                       key={idx}
-                      className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-xs transition-all"
+                      className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-xs transition-colors duration-150"
                     >
                       {/* Accordion Header */}
                       <button
@@ -682,12 +608,12 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
                         onClick={() => toggleSection(sectionKey)}
                         className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 hover:bg-slate-50/80 transition-colors text-left"
                       >
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-xl border flex items-center justify-center font-bold text-sm ${getScoreColorClass(sec.score)}`}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-9 h-9 rounded-xl border flex items-center justify-center font-bold text-sm shrink-0 ${getScoreColorClass(sec.score)}`}>
                             {sec.score}
                           </div>
-                          <div>
-                            <h4 className="font-bold text-sm sm:text-base text-[#043c44]">{sec.section}</h4>
+                          <div className="min-w-0">
+                            <h4 className="font-bold text-sm sm:text-base text-[#043c44] truncate">{sec.section}</h4>
                             <p className="text-xs text-slate-500 line-clamp-1">{sec.feedback}</p>
                           </div>
                         </div>
@@ -704,41 +630,35 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
 
                       {/* Accordion Body */}
                       {isOpen && (
-                        <div className="p-4 sm:p-5 pt-0 border-t border-slate-100 space-y-4 bg-slate-50/30">
-                          <p className="text-xs sm:text-sm text-slate-700 leading-relaxed pt-3">
+                        <div className="p-4 sm:p-6 bg-slate-50/50 border-t border-slate-100 space-y-4">
+                          <p className="text-xs text-slate-700 leading-relaxed font-medium">
                             {sec.feedback}
                           </p>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                             {/* Strengths */}
                             {sec.strengths && sec.strengths.length > 0 && (
-                              <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200/80 space-y-2">
-                                <span className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
-                                  <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Key Strengths
-                                </span>
-                                <ul className="space-y-1.5 text-xs text-emerald-950">
+                              <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200/70 space-y-2">
+                                <h5 className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Key Strengths
+                                </h5>
+                                <ul className="space-y-1 pl-4 list-disc text-xs text-emerald-950">
                                   {sec.strengths.map((str, sIdx) => (
-                                    <li key={sIdx} className="flex items-start gap-1.5">
-                                      <span className="text-emerald-500 font-bold">•</span>
-                                      <span>{str}</span>
-                                    </li>
+                                    <li key={sIdx}>{str}</li>
                                   ))}
                                 </ul>
                               </div>
                             )}
 
-                            {/* Areas for Improvement */}
+                            {/* Improvements */}
                             {sec.improvements && sec.improvements.length > 0 && (
-                              <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
-                                <span className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
-                                  <AlertTriangle className="w-4 h-4 text-amber-600" /> Areas for Improvement
-                                </span>
-                                <ul className="space-y-1.5 text-xs text-amber-950">
+                              <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200/70 space-y-2">
+                                <h5 className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Actionable Improvements
+                                </h5>
+                                <ul className="space-y-1 pl-4 list-disc text-xs text-amber-950">
                                   {sec.improvements.map((imp, iIdx) => (
-                                    <li key={iIdx} className="flex items-start gap-1.5">
-                                      <span className="text-amber-500 font-bold">•</span>
-                                      <span>{imp}</span>
-                                    </li>
+                                    <li key={iIdx}>{imp}</li>
                                   ))}
                                 </ul>
                               </div>
@@ -753,27 +673,7 @@ export const ResumeAnalysisView: React.FC<ResumeAnalysisViewProps> = ({ resumeId
             </Card>
           )}
         </div>
-      ) : (
-        <Card className="glass-panel p-8 rounded-3xl text-center space-y-4 border-teal-100 bg-white/90 shadow-xs">
-          <div className="w-12 h-12 rounded-2xl bg-teal-50 border border-teal-200 flex items-center justify-center mx-auto text-[#0d9488]">
-            <Sparkles className="w-6 h-6" />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-lg font-bold text-[#043c44]">No AI Audit Generated Yet</h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Run a full audit to get your AI Content Quality Score, deterministic Format Compatibility Check, optional Job Description Match Score, section feedback, and bullet-point rewrite suggestions.
-            </p>
-          </div>
-          <Button
-            onClick={() => handleRunAnalysis()}
-            disabled={isAnalyzing}
-            className="px-6 py-2.5 h-auto rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white font-semibold text-xs transition-all shadow-md shadow-[#043c44]/20 inline-flex items-center gap-2 border border-[#043c44]"
-          >
-            <Wand2 className="w-4 h-4 text-teal-300" />
-            Generate Resume Audit
-          </Button>
-        </Card>
-      )}
+      ) : null}
     </div>
   );
 };

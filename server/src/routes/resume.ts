@@ -3,6 +3,7 @@ import multer from 'multer';
 import { randomUUID } from 'crypto';
 import { prisma } from '../db.js';
 import { authenticateJWT } from '../middleware/auth.js';
+import { resumeAnalysisLimiter } from '../middleware/rateLimiter.js';
 import { uploadToR2, getR2SignedUrl, getBufferFromR2 } from '../services/r2.js';
 import { extractTextFromFile } from '../services/parser.js';
 import { parseResumeWithGemini, analyzeResumeWithGemini } from '../services/gemini.js';
@@ -307,7 +308,7 @@ router.get('/group/:resumeGroupId', authenticateJWT, async (req: Request, res: R
  * 2. Executes deterministic, rule-based Format Compatibility Checks (scanned PDF, images, tables, multi-column, missing sections)
  * Stores result in Analysis model linked to Resume via Prisma.
  */
-router.post('/:id/analyze', authenticateJWT, async (req: Request, res: Response) => {
+router.post('/:id/analyze', authenticateJWT, resumeAnalysisLimiter, async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
     const resumeId = req.params.id;

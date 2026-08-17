@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BookOpen, ArrowRight, Sparkles, Clock, FileText } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { BookOpen, ArrowRight, Clock, FileText } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ApiErrorBoundary } from '../components/ApiErrorBoundary';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -16,27 +19,24 @@ export interface ResourceSummary {
 }
 
 export const Resources: React.FC = () => {
-  const [resources, setResources] = useState<ResourceSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
 
-  useEffect(() => {
-    const fetchResources = async () => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/resources`);
-        const data = await response.json();
-        if (response.ok && data.success) {
-          setResources(data.resources || []);
-        }
-      } catch (err) {
-        console.error('Failed to fetch resources:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchResources();
-  }, []);
+  const {
+    data: resources = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery<ResourceSummary[]>({
+    queryKey: ['resources'],
+    queryFn: async () => {
+      const response = await fetch(`${API_BASE_URL}/api/resources`);
+      if (!response.ok) throw new Error('Failed to fetch preparation guides');
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Server error loading resources');
+      return data.resources || [];
+    },
+  });
 
   const categories = ['All', ...Array.from(new Set(resources.map((r) => r.category)))];
 
@@ -46,7 +46,7 @@ export const Resources: React.FC = () => {
       : resources.filter((r) => r.category === selectedCategory);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-12 sm:py-20 space-y-12">
+    <div className="max-w-6xl mx-auto px-4 py-12 sm:py-20 space-y-12 animate-in fade-in duration-300">
       {/* Header Banner */}
       <div className="text-center space-y-4 max-w-3xl mx-auto">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-50 text-[#0d9488] border border-teal-200/60 text-xs font-semibold uppercase tracking-wider">
@@ -68,7 +68,7 @@ export const Resources: React.FC = () => {
                 key={cat}
                 type="button"
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                   selectedCategory === cat
                     ? 'bg-[#043c44] text-white shadow-xs'
                     : 'bg-white text-slate-600 border border-slate-200 hover:bg-teal-50/60 hover:text-[#043c44]'
@@ -83,9 +83,17 @@ export const Resources: React.FC = () => {
 
       {/* Resource Cards Grid */}
       {isLoading ? (
-        <div className="text-center py-16 text-slate-400 text-sm">
-          Loading preparation articles...
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <Skeleton className="h-64 rounded-2xl" />
+          <Skeleton className="h-64 rounded-2xl" />
+          <Skeleton className="h-64 rounded-2xl" />
         </div>
+      ) : isError ? (
+        <ApiErrorBoundary
+          title="Failed to Load Resources"
+          error={error}
+          onRetry={refetch}
+        />
       ) : filteredResources.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredResources.map((resource) => (
@@ -141,9 +149,9 @@ export const Resources: React.FC = () => {
             <FileText className="w-6 h-6" />
           </div>
           <CardHeader className="p-0 space-y-1">
-            <CardTitle className="font-heading font-bold text-xl text-[#043c44]">No articles found</CardTitle>
+            <CardTitle className="font-heading font-bold text-xl text-[#043c44]">No articles in this category</CardTitle>
             <CardDescription className="text-slate-600 text-sm">
-              No preparation guides match the selected category filter.
+              Try selecting a different topic filter or check back soon for new interview prep guides.
             </CardDescription>
           </CardHeader>
         </Card>

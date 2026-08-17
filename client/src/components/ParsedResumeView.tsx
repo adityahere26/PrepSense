@@ -65,7 +65,7 @@ export interface ParsedResumeProps {
       }>;
     };
   };
-  onReupload: () => void;
+  onReupload?: () => void;
 }
 
 export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume, onReupload }) => {
@@ -270,7 +270,7 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume, onReuplo
                 {projects.map((proj, idx) => (
                   <div
                     key={idx}
-                    className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/50 hover:border-teal-300 hover:bg-teal-50/30 transition-all space-y-2 flex flex-col justify-between"
+                    className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/50 hover:border-teal-300 hover:bg-teal-50/30 transition-colors duration-150 space-y-2 flex flex-col justify-between min-h-[120px] shadow-xs"
                   >
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
