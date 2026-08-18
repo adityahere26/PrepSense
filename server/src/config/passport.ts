@@ -21,11 +21,23 @@ if (clientID && clientSecret && clientID !== 'mock_google_client_id') {
             return done(new Error('No email found in Google profile'), undefined);
           }
 
+          const photoUrl = profile.photos && profile.photos[0] ? profile.photos[0].value : null;
+
           let user = await prisma.user.findUnique({
             where: { googleId: profile.id },
           });
 
-          if (!user) {
+          if (user) {
+            if (photoUrl && user.picture !== photoUrl) {
+              user = await prisma.user.update({
+                where: { id: user.id },
+                data: {
+                  picture: photoUrl,
+                  name: user.name || profile.displayName || email.split('@')[0],
+                },
+              });
+            }
+          } else {
             user = await prisma.user.findUnique({
               where: { email },
             });
@@ -35,7 +47,8 @@ if (clientID && clientSecret && clientID !== 'mock_google_client_id') {
                 where: { id: user.id },
                 data: {
                   googleId: profile.id,
-                  picture: profile.photos && profile.photos[0] ? profile.photos[0].value : user.picture,
+                  picture: photoUrl || user.picture,
+                  name: user.name || profile.displayName || email.split('@')[0],
                 },
               });
             } else {
@@ -44,7 +57,7 @@ if (clientID && clientSecret && clientID !== 'mock_google_client_id') {
                   email,
                   name: profile.displayName || email.split('@')[0],
                   googleId: profile.id,
-                  picture: profile.photos && profile.photos[0] ? profile.photos[0].value : null,
+                  picture: photoUrl,
                 },
               });
             }

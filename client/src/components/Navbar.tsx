@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Sparkles, LogOut, User as UserIcon, LayoutDashboard, BookOpen, Trophy, Menu, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { UserAvatar } from './UserAvatar';
 
 export const Navbar: React.FC = () => {
   const { user, logout } = useAuth();
@@ -67,17 +68,12 @@ export const Navbar: React.FC = () => {
             {user ? (
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-teal-50/80 border border-teal-200/60">
-                  {user.picture ? (
-                    <img
-                      src={user.picture}
-                      alt={user.name || 'User'}
-                      className="w-6 h-6 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-6 h-6 rounded-full bg-[#043c44] text-teal-200 flex items-center justify-center text-xs font-semibold">
-                      {(user.name || user.email)[0].toUpperCase()}
-                    </div>
-                  )}
+                  <UserAvatar
+                    name={user.name}
+                    email={user.email}
+                    picture={user.picture}
+                    size="md"
+                  />
                   <span className="text-xs font-semibold text-[#043c44] max-w-[120px] truncate">
                     {user.name || user.email}
                   </span>
@@ -109,9 +105,12 @@ export const Navbar: React.FC = () => {
           <div className="flex items-center gap-2 md:hidden">
             {user && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-teal-50 border border-teal-200/60">
-                <div className="w-5 h-5 rounded-full bg-[#043c44] text-teal-200 flex items-center justify-center text-[10px] font-bold">
-                  {(user.name || user.email)[0].toUpperCase()}
-                </div>
+                <UserAvatar
+                  name={user.name}
+                  email={user.email}
+                  picture={user.picture}
+                  size="sm"
+                />
               </div>
             )}
             <button

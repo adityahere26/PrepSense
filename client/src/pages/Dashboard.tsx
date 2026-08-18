@@ -105,6 +105,9 @@ const CustomDarkTooltip = ({ active, payload }: any) => {
   return null;
 };
 
+import { MockInterviewStepPreview } from '../components/MockInterviewStepPreview';
+import { InterviewLoadingOverlay } from '../components/InterviewLoadingOverlay';
+
 export const Dashboard: React.FC = () => {
   const { user, token } = useAuth();
   const navigate = useNavigate();
@@ -123,7 +126,18 @@ export const Dashboard: React.FC = () => {
   const [targetUploadGroupId, setTargetUploadGroupId] = useState<string | undefined>(undefined);
   const [expandedVersions, setExpandedVersions] = useState<Record<string, boolean>>({});
   const [isStartingInterview, setIsStartingInterview] = useState<boolean>(false);
+  const [startingResumeId, setStartingResumeId] = useState<string | null>(null);
+  const [startingRole, setStartingRole] = useState<string>('Software Engineer');
+  const [selectingGroupId, setSelectingGroupId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'resumes' | 'sessions' | 'community'>('resumes');
+
+  const handleSelectResumeGroup = (group: ResumeGroupItem) => {
+    setSelectingGroupId(group.resumeGroupId);
+    setActiveResumeGroup(group);
+    setTimeout(() => {
+      setSelectingGroupId(null);
+    }, 400);
+  };
 
   // 1. TanStack Query: Fetch Resumes List
   const {
@@ -215,7 +229,10 @@ export const Dashboard: React.FC = () => {
 
   const handleStartMockInterview = async (resumeId: string, targetRole: string) => {
     if (!token) return;
+    const roleName = targetRole || user?.targetRole || 'Software Engineer';
     setIsStartingInterview(true);
+    setStartingResumeId(resumeId);
+    setStartingRole(roleName);
     try {
       const response = await fetch(`${API_BASE_URL}/api/interview/session`, {
         method: 'POST',
@@ -225,7 +242,7 @@ export const Dashboard: React.FC = () => {
         },
         body: JSON.stringify({
           resumeId,
-          targetRole: targetRole || user?.targetRole || 'Software Engineer',
+          targetRole: roleName,
         }),
       });
 
@@ -240,6 +257,7 @@ export const Dashboard: React.FC = () => {
       alert('Network error initiating mock interview session.');
     } finally {
       setIsStartingInterview(false);
+      setStartingResumeId(null);
     }
   };
 
@@ -663,102 +681,117 @@ export const Dashboard: React.FC = () => {
                 </Button>
               </Card>
             ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* Left Panel: Resume Groups / Versions List */}
-                <div className="lg:col-span-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-heading font-bold text-base text-[#043c44]">Your Resumes</h3>
-                    <span className="text-xs text-slate-500">{resumesList.length} groups</span>
-                  </div>
+              <div className="space-y-8">
+                {/* Top 2-Column Grid: Sidebar + Selected Resume Header */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Left Panel: Resume Groups / Versions List */}
+                  <div className="lg:col-span-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-heading font-bold text-base text-[#043c44]">Your Resumes</h3>
+                      <span className="text-xs text-slate-500">{resumesList.length} groups</span>
+                    </div>
 
-                  <div className="space-y-3">
-                    {resumesList.map((group) => {
-                      const isActive = activeResumeGroup?.resumeGroupId === group.resumeGroupId;
-                      const isExpanded = !!expandedVersions[group.resumeGroupId];
+                    <div className="space-y-3">
+                      {resumesList.map((group) => {
+                        const isActive = activeResumeGroup?.resumeGroupId === group.resumeGroupId;
+                        const isExpanded = !!expandedVersions[group.resumeGroupId];
 
-                      return (
-                        <Card
-                          key={group.id}
-                          className={`glass-panel p-4 sm:p-5 rounded-2xl border transition-colors duration-150 cursor-pointer ${
-                            isActive
-                              ? 'border-teal-400 bg-teal-50/40 shadow-xs'
-                              : 'border-slate-200/80 bg-white/90 hover:border-teal-200'
-                          }`}
-                          onClick={() => setActiveResumeGroup(group)}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="space-y-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="inline-block px-2.5 py-0.5 rounded-full bg-teal-100/80 text-[#0d9488] text-[10px] font-extrabold uppercase">
-                                  v{group.version}
-                                </span>
-                                <span className="text-xs font-semibold text-slate-500">
-                                  {group.totalVersions > 1 ? `${group.totalVersions} versions` : '1 version'}
-                                </span>
+                        return (
+                          <Card
+                            key={group.id}
+                            className={`glass-panel p-4 sm:p-5 rounded-2xl border transition-colors duration-150 cursor-pointer ${
+                              isActive
+                                ? 'border-teal-400 bg-teal-50/40 shadow-xs'
+                                : 'border-slate-200/80 bg-white/90 hover:border-teal-200'
+                            }`}
+                            onClick={() => handleSelectResumeGroup(group)}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="space-y-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="inline-block px-2.5 py-0.5 rounded-full bg-teal-100/80 text-[#0d9488] text-[10px] font-extrabold uppercase">
+                                    v{group.version}
+                                  </span>
+                                  <span className="text-xs font-semibold text-slate-500">
+                                    {group.totalVersions > 1 ? `${group.totalVersions} versions` : '1 version'}
+                                  </span>
+                                  {selectingGroupId === group.resumeGroupId && (
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0d9488]">
+                                      <Loader2 className="w-3 h-3 animate-spin text-[#0d9488]" />
+                                    </span>
+                                  )}
+                                </div>
+                                <h4 className="font-heading font-bold text-sm text-[#043c44] truncate">
+                                  {group.targetRole || 'Software Engineer'}
+                                </h4>
+                                <p className="text-[11px] text-slate-400 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {new Date(group.createdAt).toLocaleDateString(undefined, {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    year: 'numeric',
+                                  })}
+                                </p>
                               </div>
-                              <h4 className="font-heading font-bold text-sm text-[#043c44] truncate">
-                                {group.targetRole || 'Software Engineer'}
-                              </h4>
-                              <p className="text-[11px] text-slate-400 flex items-center gap-1">
-                                <Clock className="w-3 h-3" />
-                                {new Date(group.createdAt).toLocaleDateString(undefined, {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  year: 'numeric',
-                                })}
-                              </p>
+
+                              {group.aiQualityScore !== undefined && group.aiQualityScore !== null && (
+                                <div className="text-right shrink-0">
+                                  <span className="text-lg font-extrabold text-[#0d9488]">
+                                    {group.aiQualityScore}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 block">ATS Score</span>
+                                </div>
+                              )}
                             </div>
 
-                            {group.aiQualityScore !== undefined && group.aiQualityScore !== null && (
-                              <div className="text-right shrink-0">
-                                <span className="text-lg font-extrabold text-[#0d9488]">
-                                  {group.aiQualityScore}
-                                </span>
-                                <span className="text-[10px] text-slate-400 block">ATS Score</span>
-                              </div>
-                            )}
-                          </div>
+                            <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleStartNewVersionUpload(group.resumeGroupId);
+                                }}
+                                className="p-0 h-auto text-xs font-semibold text-[#0d9488] hover:text-[#043c44] flex items-center gap-1 bg-transparent hover:bg-transparent"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                Upload v{group.version + 1}
+                              </Button>
 
-                          <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStartNewVersionUpload(group.resumeGroupId);
-                              }}
-                              className="p-0 h-auto text-xs font-semibold text-[#0d9488] hover:text-[#043c44] flex items-center gap-1 bg-transparent hover:bg-transparent"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              Upload v{group.version + 1}
-                            </Button>
-
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStartMockInterview(group.id, group.targetRole || 'Software Engineer');
-                              }}
-                              disabled={isStartingInterview}
-                              className="p-0 h-auto text-xs font-semibold text-[#043c44] hover:text-[#0d9488] flex items-center gap-1 bg-transparent hover:bg-transparent"
-                            >
-                              <Mic className="w-3.5 h-3.5 text-[#0d9488]" />
-                              Mock Practice
-                            </Button>
-                          </div>
-                        </Card>
-                      );
-                    })}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleStartMockInterview(group.id, group.targetRole || 'Software Engineer');
+                                }}
+                                disabled={isStartingInterview}
+                                className="p-0 h-auto text-xs font-semibold text-[#043c44] hover:text-[#0d9488] flex items-center gap-1 bg-transparent hover:bg-transparent"
+                              >
+                                {isStartingInterview && startingResumeId === group.id ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#0d9488]" />
+                                    Preparing...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Mic className="w-3.5 h-3.5 text-[#0d9488]" />
+                                    Mock Practice
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          </Card>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
 
-                {/* Right Panel: Selected Resume Detail & AI Analysis */}
-                <div className="lg:col-span-8 space-y-6">
-                  {activeResumeGroup ? (
-                    <div className="space-y-6">
+                  {/* Right Panel: Selected Resume Header & Quick Actions */}
+                  <div className="lg:col-span-8">
+                    {activeResumeGroup ? (
                       <Card className="glass-panel p-6 rounded-3xl border-teal-100 bg-white/90 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
@@ -795,33 +828,49 @@ export const Dashboard: React.FC = () => {
                               )
                             }
                             disabled={isStartingInterview}
-                            className="text-xs font-semibold rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white shadow-xs flex items-center gap-1.5"
+                            className="text-xs font-semibold rounded-xl bg-[#043c44] hover:bg-[#074e58] text-white shadow-xs flex items-center gap-1.5 min-w-[155px] justify-center"
                           >
-                            <Mic className="w-3.5 h-3.5 text-teal-300" />
-                            Start Mock Interview
+                            {isStartingInterview && startingResumeId === activeResumeGroup.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-300" />
+                                Preparing Questions...
+                              </>
+                            ) : (
+                              <>
+                                <Mic className="w-3.5 h-3.5 text-teal-300" />
+                                Start Mock Interview
+                              </>
+                            )}
                           </Button>
                         </div>
                       </Card>
-
-                      <ParsedResumeView
-                        resume={{
-                          id: activeResumeGroup.id,
-                          resumeGroupId: activeResumeGroup.resumeGroupId,
-                          fileUrl: activeResumeGroup.fileUrl,
-                          targetRole: activeResumeGroup.targetRole,
-                          version: activeResumeGroup.version,
-                          createdAt: activeResumeGroup.createdAt,
-                          parsedJson: activeResumeGroup.parsedJson,
-                        }}
-                        onReupload={handleStartNewResumeUpload}
-                      />
-                    </div>
-                  ) : (
-                    <div className="text-center py-12 text-slate-400 text-xs">
-                      Select a resume from the left panel to inspect parsing & AI review.
-                    </div>
-                  )}
+                    ) : (
+                      <div className="text-center py-12 text-slate-400 text-xs glass-panel rounded-3xl border border-slate-200/80 bg-white/90">
+                        Select a resume from the left panel to inspect parsing & AI review.
+                      </div>
+                    )}
+                  </div>
                 </div>
+
+                {/* Prominent 3-Step Interactive Mock Interview Visual Explainer */}
+                {activeResumeGroup && <MockInterviewStepPreview />}
+
+                {/* Full-Width Section: Detailed Resume Parsing, Format Checker & AI Analysis */}
+                {activeResumeGroup && (
+                  <ParsedResumeView
+                    key={activeResumeGroup.id}
+                    resume={{
+                      id: activeResumeGroup.id,
+                      resumeGroupId: activeResumeGroup.resumeGroupId,
+                      fileUrl: activeResumeGroup.fileUrl,
+                      targetRole: activeResumeGroup.targetRole,
+                      version: activeResumeGroup.version,
+                      createdAt: activeResumeGroup.createdAt,
+                      parsedJson: activeResumeGroup.parsedJson,
+                    }}
+                    onReupload={handleStartNewResumeUpload}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -1079,6 +1128,9 @@ export const Dashboard: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Full-Screen Loading Overlay for Mock Interview Session Preparation */}
+      {isStartingInterview && <InterviewLoadingOverlay targetRole={startingRole} />}
     </div>
   );
 };
