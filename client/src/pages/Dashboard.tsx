@@ -130,6 +130,7 @@ export const Dashboard: React.FC = () => {
   const [startingRole, setStartingRole] = useState<string>('Software Engineer');
   const [selectingGroupId, setSelectingGroupId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'resumes' | 'sessions' | 'community'>('resumes');
+  const [showAllResumeGroups, setShowAllResumeGroups] = useState<boolean>(false);
 
   const handleSelectResumeGroup = (group: ResumeGroupItem) => {
     setSelectingGroupId(group.resumeGroupId);
@@ -692,7 +693,7 @@ export const Dashboard: React.FC = () => {
                     </div>
 
                     <div className="space-y-3">
-                      {resumesList.map((group) => {
+                      {(showAllResumeGroups ? resumesList : resumesList.slice(0, 4)).map((group) => {
                         const isActive = activeResumeGroup?.resumeGroupId === group.resumeGroupId;
                         const isExpanded = !!expandedVersions[group.resumeGroupId];
 
@@ -786,6 +787,24 @@ export const Dashboard: React.FC = () => {
                           </Card>
                         );
                       })}
+
+                      {resumesList.length > 4 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllResumeGroups((prev) => !prev)}
+                          className="w-full py-2.5 px-3 rounded-xl border border-slate-200/80 bg-white/90 hover:bg-teal-50/60 text-[#0d9488] hover:text-[#043c44] font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-2xs mt-2"
+                        >
+                          {showAllResumeGroups ? (
+                            <>
+                              Show Less <ChevronUp className="w-3.5 h-3.5" />
+                            </>
+                          ) : (
+                            <>
+                              View More ({resumesList.length - 4} more) <ChevronDown className="w-3.5 h-3.5" />
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
 

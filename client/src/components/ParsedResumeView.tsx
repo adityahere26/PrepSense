@@ -18,7 +18,6 @@ import {
   Code2,
 } from 'lucide-react';
 import { ResumeAnalysisView } from './ResumeAnalysisView';
-import { ResumeDocumentPreview } from './ResumeDocumentPreview';
 
 export interface ParsedResumeProps {
   resume: {
@@ -46,21 +45,93 @@ function safeParseJson(data: any): any {
       break;
     }
   }
-  return typeof current === 'object' && current !== null ? current : {};
+  if (typeof current === 'object' && current !== null) {
+    if (current.parsedJson && typeof current.parsedJson === 'object') {
+      return safeParseJson(current.parsedJson);
+    }
+    if (current.parsedData && typeof current.parsedData === 'object') {
+      return safeParseJson(current.parsedData);
+    }
+    if (current.data && typeof current.data === 'object' && (current.data.contact || current.data.workExperience)) {
+      return safeParseJson(current.data);
+    }
+    return current;
+  }
+  return {};
 }
 
 export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume }) => {
   const rawParsed = safeParseJson(resume?.parsedJson);
 
-  const { targetRole, fileUrl } = resume;
-  const contact = rawParsed.contact || {};
-  const summary: string = rawParsed.summary || '';
-  const workExperience: Array<any> = Array.isArray(rawParsed.workExperience) ? rawParsed.workExperience : [];
-  const skills: string[] = Array.isArray(rawParsed.skills) ? rawParsed.skills : [];
-  const education: Array<any> = Array.isArray(rawParsed.education) ? rawParsed.education : [];
-  const projects: Array<any> = Array.isArray(rawParsed.projects) ? rawParsed.projects : [];
+  const { id, targetRole, fileUrl } = resume;
 
-  const candidateName = contact.name || 'Candidate Resume';
+  const contact =
+    rawParsed.contact ||
+    rawParsed.contact_info ||
+    rawParsed.contactInfo ||
+    rawParsed.personal_info ||
+    rawParsed.personalInfo ||
+    {};
+
+  const summary: string =
+    rawParsed.summary ||
+    rawParsed.profile ||
+    rawParsed.objective ||
+    rawParsed.about ||
+    rawParsed.aboutMe ||
+    rawParsed.professionalSummary ||
+    '';
+
+  const rawWork =
+    rawParsed.workExperience ||
+    rawParsed.work_experience ||
+    rawParsed.experiences ||
+    rawParsed.experience ||
+    rawParsed.employment ||
+    rawParsed.employmentHistory ||
+    [];
+  const workExperience: Array<any> = Array.isArray(rawWork) ? rawWork : [];
+
+  const rawSkills =
+    rawParsed.skills ||
+    rawParsed.competencies ||
+    rawParsed.technicalSkills ||
+    rawParsed.technical_skills ||
+    rawParsed.keySkills ||
+    rawParsed.coreCompetencies ||
+    [];
+  let skills: string[] = [];
+  if (Array.isArray(rawSkills)) {
+    skills = rawSkills
+      .map((s: any) => (typeof s === 'string' ? s : s?.name || s?.skill || String(s)))
+      .filter(Boolean);
+  } else if (typeof rawSkills === 'string') {
+    skills = rawSkills.split(',').map((s: string) => s.trim()).filter(Boolean);
+  }
+
+  const rawEdu =
+    rawParsed.education ||
+    rawParsed.education_history ||
+    rawParsed.academics ||
+    rawParsed.academicHistory ||
+    [];
+  const education: Array<any> = Array.isArray(rawEdu) ? rawEdu : [];
+
+  const rawProj =
+    rawParsed.projects ||
+    rawParsed.projects_list ||
+    rawParsed.projectList ||
+    rawParsed.personalProjects ||
+    [];
+  const projects: Array<any> = Array.isArray(rawProj) ? rawProj : [];
+
+  const candidateName = contact.name || rawParsed.name || 'Candidate Resume';
+  const email = contact.email || rawParsed.email || '';
+  const phone = contact.phone || rawParsed.phone || '';
+  const location = contact.location || rawParsed.location || '';
+  const linkedin = contact.linkedin || rawParsed.linkedin || '';
+  const github = contact.github || rawParsed.github || '';
+  const portfolio = contact.portfolio || contact.website || rawParsed.portfolio || rawParsed.website || '';
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
@@ -93,57 +164,60 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume }) => {
 
         {/* Contact Details Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-          {contact.email && (
+          {email && (
             <div className="flex items-center gap-2 text-slate-600 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
               <Mail className="w-4 h-4 text-[#0d9488] shrink-0" />
-              <a href={`mailto:${contact.email}`} className="truncate hover:text-[#0d9488] transition-colors">
-                {contact.email}
+              <a href={`mailto:${email}`} className="truncate hover:text-[#0d9488] transition-colors">
+                {email}
               </a>
             </div>
           )}
 
-          {contact.phone && (
+          {phone && (
             <div className="flex items-center gap-2 text-slate-600 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
               <Phone className="w-4 h-4 text-[#0d9488] shrink-0" />
-              <span>{contact.phone}</span>
+              <span>{phone}</span>
             </div>
           )}
 
-          {contact.location && (
+          {location && (
             <div className="flex items-center gap-2 text-slate-600 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
               <MapPin className="w-4 h-4 text-[#0d9488] shrink-0" />
-              <span className="truncate">{contact.location}</span>
+              <span className="truncate">{location}</span>
             </div>
           )}
 
-          {contact.linkedin && (
+          {linkedin && (
             <div className="flex items-center gap-2 text-slate-600 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
               <Linkedin className="w-4 h-4 text-[#0d9488] shrink-0" />
-              <a href={contact.linkedin.startsWith('http') ? contact.linkedin : `https://${contact.linkedin}`} target="_blank" rel="noopener noreferrer" className="truncate hover:text-[#0d9488] transition-colors">
-                {contact.linkedin.replace(/^https?:\/\//, '')}
+              <a href={linkedin.startsWith('http') ? linkedin : `https://${linkedin}`} target="_blank" rel="noopener noreferrer" className="truncate hover:text-[#0d9488] transition-colors">
+                {linkedin.replace(/^https?:\/\//, '')}
               </a>
             </div>
           )}
 
-          {contact.github && (
+          {github && (
             <div className="flex items-center gap-2 text-slate-600 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
               <Github className="w-4 h-4 text-[#0d9488] shrink-0" />
-              <a href={contact.github.startsWith('http') ? contact.github : `https://${contact.github}`} target="_blank" rel="noopener noreferrer" className="truncate hover:text-[#0d9488] transition-colors">
-                {contact.github.replace(/^https?:\/\//, '')}
+              <a href={github.startsWith('http') ? github : `https://${github}`} target="_blank" rel="noopener noreferrer" className="truncate hover:text-[#0d9488] transition-colors">
+                {github.replace(/^https?:\/\//, '')}
               </a>
             </div>
           )}
 
-          {contact.portfolio && (
+          {portfolio && (
             <div className="flex items-center gap-2 text-slate-600 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
               <Globe className="w-4 h-4 text-[#0d9488] shrink-0" />
-              <a href={contact.portfolio.startsWith('http') ? contact.portfolio : `https://${contact.portfolio}`} target="_blank" rel="noopener noreferrer" className="truncate hover:text-[#0d9488] transition-colors">
-                {contact.portfolio.replace(/^https?:\/\//, '')}
+              <a href={portfolio.startsWith('http') ? portfolio : `https://${portfolio}`} target="_blank" rel="noopener noreferrer" className="truncate hover:text-[#0d9488] transition-colors">
+                {portfolio.replace(/^https?:\/\//, '')}
               </a>
             </div>
           )}
         </div>
       </Card>
+
+      {/* AI Resume Quality & Format Audit Section */}
+      <ResumeAnalysisView resumeId={id} targetRole={targetRole || undefined} />
 
       {/* Professional Summary */}
       {summary && (
@@ -168,17 +242,31 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume }) => {
 
           <div className="space-y-6">
             {workExperience.map((exp: any, idx: number) => {
-              const position = exp.position || exp.title || exp.role || 'Role';
-              const company = exp.company || exp.organization || 'Company';
-              const duration = exp.duration || exp.dates || (exp.startDate ? `${exp.startDate} - ${exp.endDate || 'Present'}` : null);
+              const position = exp.position || exp.title || exp.role || exp.jobTitle || 'Role';
+              const company = exp.company || exp.organization || exp.employer || 'Company';
+              const duration =
+                exp.duration ||
+                exp.dates ||
+                (exp.startDate
+                  ? `${exp.startDate} - ${exp.endDate || 'Present'}`
+                  : exp.start_date
+                  ? `${exp.start_date} - ${exp.end_date || 'Present'}`
+                  : null);
+
               const highlights: string[] = Array.isArray(exp.highlights)
                 ? exp.highlights
                 : Array.isArray(exp.responsibilities)
                 ? exp.responsibilities
                 : Array.isArray(exp.bullets)
                 ? exp.bullets
+                : Array.isArray(exp.bulletPoints)
+                ? exp.bulletPoints
+                : Array.isArray(exp.description)
+                ? exp.description
                 : typeof exp.description === 'string'
                 ? [exp.description]
+                : typeof exp.summary === 'string'
+                ? [exp.summary]
                 : [];
 
               return (
@@ -223,13 +311,18 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume }) => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {projects.map((proj: any, idx: number) => {
-              const name = proj.name || proj.title || `Project ${idx + 1}`;
-              const desc = proj.description || proj.details || '';
+              const name = proj.name || proj.title || proj.projectName || `Project ${idx + 1}`;
+              const desc = Array.isArray(proj.description) ? proj.description.join(' ') : proj.description || proj.details || proj.summary || '';
               const techStack: string[] = Array.isArray(proj.technologies)
                 ? proj.technologies
                 : Array.isArray(proj.techStack)
                 ? proj.techStack
+                : Array.isArray(proj.tech)
+                ? proj.tech
+                : typeof proj.technologies === 'string'
+                ? proj.technologies.split(',').map((t: string) => t.trim()).filter(Boolean)
                 : [];
+              const projLink = proj.link || proj.url || proj.github || proj.demo || '';
 
               return (
                 <div key={idx} className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100 space-y-2.5 flex flex-col justify-between">
@@ -239,8 +332,8 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume }) => {
                         <Code2 className="w-3.5 h-3.5 text-[#0d9488]" />
                         {name}
                       </h4>
-                      {proj.link && (
-                        <a href={proj.link} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#0d9488] hover:underline font-medium">
+                      {projLink && (
+                        <a href={projLink.startsWith('http') ? projLink : `https://${projLink}`} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#0d9488] hover:underline font-medium">
                           Link ↗
                         </a>
                       )}
@@ -292,9 +385,13 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume }) => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {education.map((edu: any, idx: number) => {
-              const degree = edu.degree || edu.fieldOfStudy || edu.program || 'Degree';
-              const institution = edu.institution || edu.school || edu.university || 'University';
-              const year = edu.dates || edu.year || edu.graduationYear || '';
+              const degree = edu.degree || edu.fieldOfStudy || edu.program || edu.major || 'Degree';
+              const institution = edu.institution || edu.school || edu.university || edu.college || 'University';
+              const year =
+                edu.dates ||
+                edu.year ||
+                edu.graduationYear ||
+                (edu.startDate ? `${edu.startDate} - ${edu.endDate || 'Present'}` : edu.start_date ? `${edu.start_date} - ${edu.end_date || 'Present'}` : '');
 
               return (
                 <div key={idx} className="bg-slate-50/70 p-4 rounded-2xl border border-slate-100 space-y-1">
@@ -307,16 +404,6 @@ export const ParsedResumeView: React.FC<ParsedResumeProps> = ({ resume }) => {
           </div>
         </Card>
       )}
-
-      {/* ========================================================================= */}
-      {/* ORDER 2: EMBEDDED FILE PREVIEW (PDF inline iframe / DOCX format card)     */}
-      {/* ========================================================================= */}
-      <ResumeDocumentPreview fileUrl={fileUrl} targetRole={targetRole} />
-
-      {/* ========================================================================= */}
-      {/* ORDER 3: AI RESUME ANALYSIS & QUALITY SCORES                             */}
-      {/* ========================================================================= */}
-      <ResumeAnalysisView resumeId={resume.id} targetRole={targetRole || undefined} />
     </div>
   );
 };
