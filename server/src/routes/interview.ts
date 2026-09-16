@@ -625,7 +625,7 @@ router.post('/session/:sessionId/answer', authenticateJWT, transcriptionLimiter,
  * Accepts JSON: { audioData: string, mimeType?: string }
  * Returns: { text: string }
  */
-router.post('/transcribe-chunk', transcriptionLimiter, async (req: Request, res: Response) => {
+router.post('/transcribe-chunk', authenticateJWT, transcriptionLimiter, async (req: Request, res: Response) => {
   try {
     const { audioData, mimeType } = req.body || {};
 

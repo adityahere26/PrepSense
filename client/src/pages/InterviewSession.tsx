@@ -442,12 +442,14 @@ export const InterviewSession: React.FC = () => {
 
       setIsMicActive(true);
 
-      // 3. Connect to WebSocket server endpoint
+      // 3. Connect to WebSocket server endpoint (token required — the server verifies it
+      // and scopes the session lookup to this user, since a browser WebSocket can't send
+      // a custom Authorization header)
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = API_BASE_URL.replace(/^https?:\/\//, '');
-      const wsUrl = `${wsProtocol}//${wsHost}/api/interview/live?sessionId=${sessionId}`;
+      const wsUrl = `${wsProtocol}//${wsHost}/api/interview/live?sessionId=${sessionId}&token=${encodeURIComponent(token || '')}`;
 
-      console.log('[CLIENT-WS] Connecting to WebSocket endpoint:', wsUrl);
+      console.log('[CLIENT-WS] Connecting to WebSocket endpoint (token redacted):', wsUrl.replace(/token=[^&]+/, 'token=REDACTED'));
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

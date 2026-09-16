@@ -3,6 +3,7 @@ import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { parse as parseUrl } from 'url';
 import { prisma } from '../db.js';
 import { createGeminiLiveSession, GeminiLiveSessionWrapper } from './geminiLive.js';
+import { verifyAndResolveUser } from '../middleware/auth.js';
 
 export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
@@ -20,6 +21,7 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
   wss.on('connection', async (ws: WebSocket, request) => {
     const parsedUrl = parseUrl(request.url || '', true);
     const sessionId = (parsedUrl.query.sessionId as string) || (parsedUrl.query.id as string);
+    const token = parsedUrl.query.token as string | undefined;
 
     console.log(`[WS-SERVER] 🔌 Incoming WebSocket connection for Live Interview (Session ID: "${sessionId || 'missing'}")`);
 
@@ -29,13 +31,32 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
       return;
     }
 
+    if (!token) {
+      console.warn(`[WS-SERVER] ⚠️ WebSocket connection rejected: Missing auth token (Session ID: "${sessionId}")`);
+      ws.send(JSON.stringify({ type: 'error', message: 'Missing required token query parameter' }));
+      ws.close(4401, 'Unauthorized');
+      return;
+    }
+
+    let userId: string;
+    try {
+      const user = await verifyAndResolveUser(token);
+      userId = user.id;
+    } catch (authErr) {
+      console.warn(`[WS-SERVER] ⚠️ WebSocket connection rejected: Invalid auth token (Session ID: "${sessionId}")`);
+      ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: Invalid or expired token' }));
+      ws.close(4401, 'Unauthorized');
+      return;
+    }
+
     let geminiLiveSession: GeminiLiveSessionWrapper | null = null;
     let audioChunkCounter = 0;
 
     try {
-      // 1. Fetch InterviewSession and pre-generated InterviewQuestions from Postgres via Prisma
-      const sessionRecord = await prisma.interviewSession.findUnique({
-        where: { id: sessionId.trim() },
+      // 1. Fetch InterviewSession and pre-generated InterviewQuestions from Postgres via Prisma,
+      //    scoped to the authenticated user so one candidate can't hijack another's session.
+      const sessionRecord = await prisma.interviewSession.findFirst({
+        where: { id: sessionId.trim(), userId },
         include: {
           questions: {
             orderBy: { order: 'asc' },
@@ -44,7 +65,7 @@ export function setupLiveInterviewWebSocket(server: HttpServer): WebSocketServer
       });
 
       if (!sessionRecord) {
-        console.warn(`[WS-SERVER] ⚠️ WebSocket connection rejected: InterviewSession [${sessionId}] not found`);
+        console.warn(`[WS-SERVER] ⚠️ WebSocket connection rejected: InterviewSession [${sessionId}] not found or access denied`);
         ws.send(JSON.stringify({ type: 'error', message: `Interview session "${sessionId}" not found` }));
         ws.close(1008, 'Session not found');
         return;
