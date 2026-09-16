@@ -14,7 +14,6 @@ interface AuthContextType {
   token: string | null;
   loading: boolean;
   loginWithGoogle: () => void;
-  loginWithMock: () => void;
   handleTokenReceived: (token: string) => Promise<void>;
   logout: () => void;
 }
@@ -64,10 +63,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.location.href = `${API_BASE_URL}/api/auth/google`;
   };
 
-  const loginWithMock = () => {
-    window.location.href = `${API_BASE_URL}/api/auth/mock-login?redirect=true`;
-  };
-
   const logout = () => {
     removeStoredToken();
     setToken(null);
@@ -81,7 +76,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         loading,
         loginWithGoogle,
-        loginWithMock,
         handleTokenReceived,
         logout,
       }}

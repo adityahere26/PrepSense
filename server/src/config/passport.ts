@@ -6,7 +6,7 @@ const clientID = process.env.GOOGLE_CLIENT_ID || '';
 const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
 const callbackURL = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/auth/google/callback';
 
-if (clientID && clientSecret && clientID !== 'mock_google_client_id') {
+if (clientID && clientSecret) {
   passport.use(
     new GoogleStrategy(
       {
@@ -71,7 +71,7 @@ if (clientID && clientSecret && clientID !== 'mock_google_client_id') {
     )
   );
 } else {
-  console.warn('⚠️ Google OAuth credentials not configured or set to mock values. OAuth endpoints will fall back to mock auth.');
+  console.warn('⚠️ Google OAuth credentials not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable sign-in.');
 }
 
 export default passport;

@@ -1,12 +1,12 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Sparkles, ShieldCheck, Zap } from 'lucide-react';
+import { Sparkles, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 
 export const Login: React.FC = () => {
-  const { user, loginWithGoogle, loginWithMock } = useAuth();
+  const { user, loginWithGoogle } = useAuth();
 
   if (user) {
     return <Navigate to="/dashboard" replace />;
@@ -56,29 +56,11 @@ export const Login: React.FC = () => {
             </svg>
             Sign in with Google
           </Button>
-
-          <div className="relative my-4">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-200" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-white px-2 text-slate-400 font-medium">Developer Testing</span>
-            </div>
-          </div>
-
-          {/* Quick Mock Sign-In for testing without GCP Credentials configured */}
-          <Button
-            onClick={loginWithMock}
-            className="w-full py-3 h-auto px-4 rounded-xl bg-teal-50 hover:bg-teal-100/70 text-[#043c44] font-semibold text-sm transition-all border border-teal-200/80 flex items-center justify-center gap-2"
-          >
-            <Zap className="w-4 h-4 text-[#0d9488]" />
-            Quick Dev Login (Mock OAuth)
-          </Button>
         </CardContent>
 
         <CardFooter className="p-0 border-0 bg-transparent flex items-center justify-center gap-1.5 text-xs text-slate-500 pt-2">
           <ShieldCheck className="w-4 h-4 text-[#0d9488]" />
-          <span>JWT Authenticated • Cross-Origin CORS Secured</span>
+          <span>Secured with Google OAuth 2.0</span>
         </CardFooter>
       </Card>
     </div>

@@ -25,7 +25,15 @@ declare global {
   }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'prepsense_dev_jwt_secret_key_12345';
+function requireJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET environment variable is required but not set.');
+  }
+  return secret;
+}
+
+const JWT_SECRET = requireJwtSecret();
 
 export function generateToken(payload: UserPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
