@@ -181,6 +181,51 @@ router.get('/session/:id', authenticateJWT, async (req: Request, res: Response) 
 });
 
 /**
+ * POST /api/interview/session/:id/confidence
+ * Records the candidate's self-reported 1-5 confidence rating, either "before" the
+ * session starts or "after" it completes (PRD success metric: confidence delta).
+ */
+router.post('/session/:id/confidence', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { id } = req.params;
+    const { stage, rating } = req.body || {};
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (stage !== 'before' && stage !== 'after') {
+      return res.status(400).json({ error: 'stage must be "before" or "after"' });
+    }
+
+    const numericRating = Number(rating);
+    if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
+      return res.status(400).json({ error: 'rating must be an integer between 1 and 5' });
+    }
+
+    const session = await prisma.interviewSession.findFirst({ where: { id, userId } });
+    if (!session) {
+      return res.status(404).json({ error: 'Interview session not found' });
+    }
+
+    const updated = await prisma.interviewSession.update({
+      where: { id },
+      data: stage === 'before' ? { confidenceBefore: numericRating } : { confidenceAfter: numericRating },
+    });
+
+    return res.json({
+      success: true,
+      confidenceBefore: updated.confidenceBefore,
+      confidenceAfter: updated.confidenceAfter,
+    });
+  } catch (error: any) {
+    console.error('❌ Error recording confidence rating:', error);
+    return res.status(500).json({ error: error.message || 'Failed to record confidence rating' });
+  }
+});
+
+/**
  * GET /api/interview/sessions
  * Lists past interview sessions for the logged in user.
  */
@@ -379,10 +424,43 @@ router.get('/analytics', authenticateJWT, async (req: Request, res: Response) =>
       .filter((t) => t.count > 0)
       .sort((a, b) => b.count - a.count);
 
+    // 3. Confidence delta: average (after - before) across sessions with both ratings captured
+    const sessionsWithConfidence = sessions.filter(
+      (s) => typeof s.confidenceBefore === 'number' && typeof s.confidenceAfter === 'number'
+    );
+    const confidence =
+      sessionsWithConfidence.length > 0
+        ? {
+            sampleSize: sessionsWithConfidence.length,
+            avgBefore:
+              Math.round(
+                (sessionsWithConfidence.reduce((acc, s) => acc + (s.confidenceBefore as number), 0) /
+                  sessionsWithConfidence.length) *
+                  10
+              ) / 10,
+            avgAfter:
+              Math.round(
+                (sessionsWithConfidence.reduce((acc, s) => acc + (s.confidenceAfter as number), 0) /
+                  sessionsWithConfidence.length) *
+                  10
+              ) / 10,
+            avgDelta:
+              Math.round(
+                (sessionsWithConfidence.reduce(
+                  (acc, s) => acc + ((s.confidenceAfter as number) - (s.confidenceBefore as number)),
+                  0
+                ) /
+                  sessionsWithConfidence.length) *
+                  10
+              ) / 10,
+          }
+        : null;
+
     return res.json({
       success: true,
       scoreTrend,
       recurringImprovementAreas,
+      confidence,
     });
   } catch (error: any) {
     console.error('❌ Error building interview analytics:', error);

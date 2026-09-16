@@ -57,6 +57,8 @@ model InterviewSession {
   targetRole  String
   status      String              @default("in_progress") // in_progress | completed
   summaryJson String?             // Stores JSON stringified data in SQLite
+  confidenceBefore Int?           // Self-reported 1-5 confidence rating, captured before the session starts
+  confidenceAfter  Int?           // Self-reported 1-5 confidence rating, captured after the session completes
   createdAt   DateTime            @default(now())
   completedAt DateTime?
   questions   InterviewQuestion[]

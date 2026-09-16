@@ -113,6 +113,11 @@ export const InterviewSession: React.FC = () => {
   const [evaluations, setEvaluations] = useState<Record<string, AnswerEvaluation>>({});
   const [sessionSummary, setSessionSummary] = useState<SessionSummaryData | null>(null);
 
+  // Self-Reported Confidence Rating (PRD success metric: pre/post confidence delta)
+  const [confidenceBeforeRating, setConfidenceBeforeRating] = useState<number | null>(null);
+  const [confidenceBeforePrompted, setConfidenceBeforePrompted] = useState<boolean>(false);
+  const [confidenceAfterRating, setConfidenceAfterRating] = useState<number | null>(null);
+
   const sessionRef = useRef<SessionData | null>(null);
   const currentQuestionIndexRef = useRef<number>(0);
   const lastEvaluatedQuestionIdRef = useRef<string | null>(null);
@@ -334,6 +339,28 @@ export const InterviewSession: React.FC = () => {
   };
 
   // Start Real-time Live Interview Session via WebSocket
+  const submitConfidenceRating = async (stage: 'before' | 'after', rating: number) => {
+    if (!sessionId) return;
+    try {
+      await fetch(`${API_BASE_URL}/api/interview/session/${sessionId}/confidence`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ stage, rating }),
+      });
+    } catch (err) {
+      console.warn('Non-critical: failed to record confidence rating', err);
+    }
+    if (stage === 'before') {
+      setConfidenceBeforeRating(rating);
+      setConfidenceBeforePrompted(true);
+    } else {
+      setConfidenceAfterRating(rating);
+    }
+  };
+
   const startLiveInterview = async () => {
     if (!sessionId) return;
 
@@ -741,6 +768,37 @@ export const InterviewSession: React.FC = () => {
         </div>
       </div>
 
+      {/* Pre-Session Confidence Check (self-reported, feeds the dashboard confidence-delta metric) */}
+      {connectionStatus === 'disconnected' && !isCompleted && !confidenceBeforePrompted && (
+        <Card className="bg-slate-900/70 border border-slate-800 rounded-2xl">
+          <CardContent className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <p className="text-xs sm:text-sm text-slate-300 font-medium">
+              Before you start — how confident do you feel about this interview right now?
+            </p>
+            <div className="flex items-center gap-2 shrink-0">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => submitConfidenceRating('before', n)}
+                  className="w-8 h-8 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-teal-500/20 hover:border-teal-400 text-slate-200 hover:text-teal-300 text-xs font-bold transition-colors"
+                  title={`${n} out of 5`}
+                >
+                  {n}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setConfidenceBeforePrompted(true)}
+                className="text-[11px] text-slate-500 hover:text-slate-300 font-medium ml-1"
+              >
+                Skip
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Main Live Session Panel */}
       <Card className="bg-slate-900/90 border border-slate-800 backdrop-blur-xl rounded-3xl text-white shadow-2xl overflow-hidden">
         <CardContent className="p-6 sm:p-8">
@@ -975,6 +1033,37 @@ export const InterviewSession: React.FC = () => {
                 </ul>
               </div>
             )}
+
+            {/* Post-Session Confidence Check */}
+            <div className="p-5 bg-slate-800/50 border border-slate-700 rounded-2xl">
+              {confidenceAfterRating === null ? (
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <p className="text-xs sm:text-sm text-slate-300 font-medium">
+                    Now that it's done — how confident do you feel?
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => submitConfidenceRating('after', n)}
+                        className="w-8 h-8 rounded-lg border border-slate-700 bg-slate-900/80 hover:bg-teal-500/20 hover:border-teal-400 text-slate-200 hover:text-teal-300 text-xs font-bold transition-colors"
+                        title={`${n} out of 5`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs sm:text-sm text-teal-300 font-medium flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-teal-400" />
+                  {confidenceBeforeRating !== null
+                    ? `Thanks! Confidence went from ${confidenceBeforeRating}/5 to ${confidenceAfterRating}/5.`
+                    : 'Thanks for the feedback!'}
+                </p>
+              )}
+            </div>
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <Button
