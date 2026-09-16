@@ -27,7 +27,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ApiErrorBoundary } from './ApiErrorBoundary';
 import { useAuth } from '../context/AuthContext';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 export interface SectionFeedbackItem {
   section: string;
