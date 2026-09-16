@@ -107,3 +107,43 @@ export const transcriptionLimiter = rateLimit({
     });
   },
 });
+
+/**
+ * 4. Resume Upload Limiter
+ * Cap at 20 uploads per user per hour (each triggers a Gemini parse call + R2 storage write)
+ */
+export const resumeUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: createLimiterStore('resume_upload'),
+  keyGenerator,
+  validate: { default: false },
+  handler: (_req: Request, res: Response) => {
+    return res.status(429).json({
+      success: false,
+      error: 'Rate limit exceeded: You have reached the maximum of 20 resume uploads per hour. Please try again later.',
+    });
+  },
+});
+
+/**
+ * 5. Answer Evaluation Limiter
+ * Cap at 30 evaluate-answer calls per user per hour (each is a full Gemini evaluation call)
+ */
+export const answerEvaluationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: createLimiterStore('answer_evaluation'),
+  keyGenerator,
+  validate: { default: false },
+  handler: (_req: Request, res: Response) => {
+    return res.status(429).json({
+      success: false,
+      error: 'Rate limit exceeded: You have reached the maximum of 30 answer evaluations per hour. Please try again later.',
+    });
+  },
+});

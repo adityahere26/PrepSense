@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { prisma } from '../db.js';
 import { authenticateJWT } from '../middleware/auth.js';
-import { interviewCreationLimiter, transcriptionLimiter } from '../middleware/rateLimiter.js';
+import { interviewCreationLimiter, transcriptionLimiter, answerEvaluationLimiter } from '../middleware/rateLimiter.js';
 import {
   generateInterviewQuestionsWithGemini,
   generateQuestionTTSWithGemini,
@@ -650,7 +650,7 @@ router.post('/transcribe-chunk', authenticateJWT, transcriptionLimiter, async (r
  * Evaluates candidate answer for a specific question, saves InterviewAnswer in DB,
  * and if session is complete, synthesizes session summary and marks session as completed.
  */
-router.post('/evaluate-answer', authenticateJWT, async (req: Request, res: Response) => {
+router.post('/evaluate-answer', authenticateJWT, answerEvaluationLimiter, async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
     if (!userId) {

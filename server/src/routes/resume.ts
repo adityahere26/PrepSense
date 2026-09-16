@@ -3,7 +3,7 @@ import multer from 'multer';
 import { randomUUID } from 'crypto';
 import { prisma } from '../db.js';
 import { authenticateJWT } from '../middleware/auth.js';
-import { resumeAnalysisLimiter } from '../middleware/rateLimiter.js';
+import { resumeAnalysisLimiter, resumeUploadLimiter } from '../middleware/rateLimiter.js';
 import { uploadToR2, getR2SignedUrl, getBufferFromR2 } from '../services/r2.js';
 import { extractTextFromFile } from '../services/parser.js';
 import { parseResumeWithGemini, analyzeResumeWithGemini } from '../services/gemini.js';
@@ -38,7 +38,7 @@ const upload = multer({
  * Accepts multipart form with targetRole (string), optional resumeGroupId (string), and resume (file)
  * Creates a new Resume version record in Postgres via Prisma.
  */
-router.post('/upload', authenticateJWT, (req: Request, res: Response) => {
+router.post('/upload', authenticateJWT, resumeUploadLimiter, (req: Request, res: Response) => {
   upload.single('resume')(req, res, async (err: any) => {
     if (err) {
       const message = err instanceof multer.MulterError ? `Upload error: ${err.message}` : err.message;
