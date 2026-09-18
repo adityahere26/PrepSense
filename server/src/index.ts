@@ -17,6 +17,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 
+// Trust the first proxy hop (Railway/Render/etc. sit in front of the app) so
+// req.ip and req.secure reflect the real client, not the proxy.
+app.set('trust proxy', 1);
+
+// Don't advertise the framework in responses.
+app.disable('x-powered-by');
+
 // 1. CORS configuration - allow specified client origin with credentials
 app.use(
   cors({
@@ -48,6 +55,21 @@ app.get('/api/health', (_req, res) => {
     service: 'PrepSense Server API',
     timestamp: new Date().toISOString(),
   });
+});
+
+// 5. 404 handler for unmatched routes (JSON, not Express's default HTML page)
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// 6. Global error handler - catches anything a route didn't try/catch itself
+// (e.g. malformed JSON bodies from express.json()) and always returns JSON,
+// never a stack trace or internal file paths, regardless of NODE_ENV.
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(`❌ Unhandled error [${req.method} ${req.path}]:`, err);
+  const status = err.status || err.statusCode || 500;
+  const message = status === 400 && err.type === 'entity.parse.failed' ? 'Invalid JSON in request body' : 'Internal server error';
+  res.status(status).json({ error: message });
 });
 
 // Create HTTP Server & Attach Live Interview WebSocket
